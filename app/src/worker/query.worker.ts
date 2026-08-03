@@ -1,0 +1,445 @@
+/**
+ * Artifact loading and the query engine. See SPEC.md section 3.4.
+ *
+ * Everything interactive is two linear passes over typed arrays: a fold over the selected
+ * activities, then a scan over all sites. No spatial index, no binary search, no bitsets --
+ * the budget is met by linear passes and keeping them branch-light.
+ */
+
+import {
+  FORMAT_VERSION,
+  PARAMS_HASH,
+  SPORT_GROUPS,
+  xToLng,
+  yToLat,
+  type ActivitySummary,
+  type BlockRef,
+  type Manifest,
+} from '@um/ledger';
+import type {
+  GroupRow,
+  MapMode,
+  QueryExtras,
+  QueryRequest,
+  Viewport,
+  WorkerIn,
+  WorkerOut,
+} from './protocol.js';
+
+const post = (m: WorkerOut, transfer?: Transferable[]) =>
+  (self as unknown as Worker).postMessage(m, transfer ?? []);
+
+// ---------------------------------------------------------------------------------------
+// Colour ramps. Kept in sync with app/src/theme.css and SPEC.md section 6.4.
+// ---------------------------------------------------------------------------------------
+const hex = (h: string): [number, number, number] => [
+  parseInt(h.slice(1, 3), 16),
+  parseInt(h.slice(3, 5), 16),
+  parseInt(h.slice(5, 7), 16),
+];
+
+const EXPLORATION = [hex('#eda100'), hex('#256abf'), hex('#5598e7'), hex('#9ec5f4'), hex('#9ec5f4')];
+const HEATMAP = [hex('#256abf'), hex('#3987e5'), hex('#6da7ec'), hex('#9ec5f4'), hex('#cde2fb')];
+const EXPLORATION_ALPHA = 255;
+const HEATMAP_ALPHA = 90;
+
+/** Visit count -> band index. Both modes share the 2-4 / 5-9 breakpoints. */
+function band(v: number): number {
+  if (v <= 1) return 0;
+  if (v <= 4) return 1;
+  if (v <= 9) return 2;
+  if (v <= 24) return 3;
+  return 4;
+}
+
+// ---------------------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------------------
+let manifest: Manifest | null = null;
+let activities: ActivitySummary[] = [];
+let nSites = 0;
+
+let siteX: Int32Array;
+let siteY: Int32Array;
+let siteCreditCm: Uint16Array;
+let siteMintAct: Uint32Array;
+let siteMintTs: Uint32Array;
+let firstTsByGroup: Uint32Array[] = [];
+let actOffsets: Uint32Array;
+let touchSiteIds: Uint32Array;
+
+let visitCount: Uint16Array;
+const colorSlots: (Uint8Array | null)[] = [null, null];
+const slotFree: boolean[] = [true, true];
+
+/** Incremental-fold state: which window the current visitCount reflects. */
+let foldT0 = NaN;
+let foldT1 = NaN;
+let foldGroupKey = '';
+
+function view(buf: ArrayBuffer, ref: BlockRef): Int32Array | Uint32Array | Uint16Array | Uint8Array {
+  switch (ref.type) {
+    case 'Int32':
+      return new Int32Array(buf, ref.byteOffset, ref.length);
+    case 'Uint32':
+      return new Uint32Array(buf, ref.byteOffset, ref.length);
+    case 'Uint16':
+      return new Uint16Array(buf, ref.byteOffset, ref.length);
+    default:
+      return new Uint8Array(buf, ref.byteOffset, ref.length);
+  }
+}
+
+async function fetchBuffer(url: string, onChunk: (n: number) => void): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  if (!res.body) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.length;
+    onChunk(value.length);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out.buffer;
+}
+
+async function init(): Promise<void> {
+  let mf: Manifest;
+  try {
+    const res = await fetch('/artifacts/manifest.json');
+    if (!res.ok) throw new Error(String(res.status));
+    mf = (await res.json()) as Manifest;
+  } catch {
+    post({ type: 'error', kind: 'no-artifacts', message: 'No artifacts found.' });
+    return;
+  }
+
+  if (mf.formatVersion !== FORMAT_VERSION) {
+    // Unreadable, not merely stale: do not create typed-array views over an unknown layout.
+    post({
+      type: 'error',
+      kind: 'format-mismatch',
+      message: `Artifacts use format ${mf.formatVersion}, this build expects ${FORMAT_VERSION}.`,
+    });
+    return;
+  }
+
+  let loaded = 0;
+  const bump = (n: number) => {
+    loaded += n;
+    post({ type: 'progress', loaded, total: 0 });
+  };
+
+  const [sitesBuf, touchesBuf, actsJson] = await Promise.all([
+    fetchBuffer(`/artifacts/${mf.files.sites.path}`, bump),
+    fetchBuffer(`/artifacts/${mf.files.touches.path}`, bump),
+    fetch(`/artifacts/${mf.files.activities.path}`).then((r) => r.json() as Promise<ActivitySummary[]>),
+  ]);
+
+  manifest = mf;
+  activities = actsJson;
+  nSites = mf.counts.sites;
+  const sb = mf.files.sites.blocks;
+
+  siteX = view(sitesBuf, sb.x) as Int32Array;
+  siteY = view(sitesBuf, sb.y) as Int32Array;
+  siteCreditCm = view(sitesBuf, sb.creditCm) as Uint16Array;
+  siteMintTs = view(sitesBuf, sb.mintTs) as Uint32Array;
+  siteMintAct = view(sitesBuf, sb.mintAct) as Uint32Array;
+  firstTsByGroup = sb.firstTsByGroup.map((r) => view(sitesBuf, r) as Uint32Array);
+  actOffsets = view(touchesBuf, mf.files.touches.blocks.actOffsets) as Uint32Array;
+  touchSiteIds = view(touchesBuf, mf.files.touches.blocks.siteIds) as Uint32Array;
+
+  visitCount = new Uint16Array(nSites);
+  colorSlots[0] = new Uint8Array(4 * nSites);
+  colorSlots[1] = new Uint8Array(4 * nSites);
+
+  // Derive render geometry once: each site becomes a short segment centred on its position
+  // and oriented along its bearing. Float32 lng/lat gives ~0.6 m precision, well inside an 8 m mark.
+  const bearing = view(sitesBuf, sb.bearing) as Uint8Array;
+  const half = ((mf.params.RESAMPLE_M as number) ?? 8) / 2;
+  const src = new Float32Array(2 * nSites);
+  const dst = new Float32Array(2 * nSites);
+  for (let i = 0; i < nSites; i++) {
+    const x = siteX[i] / 100;
+    const y = siteY[i] / 100;
+    const lat = yToLat(y);
+    const cosLat = Math.cos((lat * Math.PI) / 180);
+    // Stored bearing is in units of 2 degrees over 0..358.
+    const rad = (bearing[i] * 2 * Math.PI) / 180;
+    const dx = (Math.sin(rad) * half) / cosLat;
+    const dy = (Math.cos(rad) * half) / cosLat;
+    src[2 * i] = xToLng(x - dx);
+    src[2 * i + 1] = yToLat(y - dy);
+    dst[2 * i] = xToLng(x + dx);
+    dst[2 * i + 1] = yToLat(y + dy);
+  }
+
+  const mintTsCopy = siteMintTs.slice();
+  const mintActCopy = siteMintAct.slice();
+  post(
+    {
+      type: 'ready',
+      manifest: mf,
+      activities,
+      sourcePositions: src,
+      targetPositions: dst,
+      nSites,
+      siteMintTs: mintTsCopy,
+      siteMintAct: mintActCopy,
+    },
+    [src.buffer, dst.buffer, mintTsCopy.buffer, mintActCopy.buffer],
+  );
+
+  if (mf.paramsHash !== PARAMS_HASH) {
+    // Readable, just built with different parameters: warn but let the app render.
+    post({
+      type: 'error',
+      kind: 'params-mismatch',
+      message: 'Artifacts were built with different algorithm parameters. Run `npm run build:ledger`.',
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------------------
+
+function inViewport(i: number, vp: Viewport): boolean {
+  const x = siteX[i];
+  const y = siteY[i];
+  return x >= vp.minX && x <= vp.maxX && y >= vp.minY && y <= vp.maxY;
+}
+
+/** Fold one activity's touched sites into visitCount. */
+function foldActivity(idx: number, delta: 1 | -1): void {
+  const from = actOffsets[idx];
+  const to = actOffsets[idx + 1];
+  for (let k = from; k < to; k++) visitCount[touchSiteIds[k]] += delta;
+}
+
+function qualifies(a: ActivitySummary, t0: number, t1: number, groupSet: Set<number>): boolean {
+  return a.startTs >= t0 && a.startTs <= t1 && groupSet.has(a.group);
+}
+
+function runFold(req: QueryRequest, groupSet: Set<number>): number {
+  const key = [...groupSet].sort().join(',');
+  const canIncrement =
+    req.incremental === true &&
+    key === foldGroupKey &&
+    foldT0 === req.t0 &&
+    Number.isFinite(foldT1) &&
+    req.t1 >= foldT1;
+
+  if (canIncrement) {
+    // Expanding window: only fold in what newly entered.
+    let count = 0;
+    for (const a of activities) {
+      if (groupSet.has(a.group) && a.startTs >= req.t0 && a.startTs <= req.t1) count++;
+      if (groupSet.has(a.group) && a.startTs > foldT1 && a.startTs <= req.t1) foldActivity(a.idx, 1);
+    }
+    foldT1 = req.t1;
+    return count;
+  }
+
+  visitCount.fill(0);
+  let count = 0;
+  for (const a of activities) {
+    if (qualifies(a, req.t0, req.t1, groupSet)) {
+      foldActivity(a.idx, 1);
+      count++;
+    }
+  }
+  foldT0 = req.t0;
+  foldT1 = req.t1;
+  foldGroupKey = key;
+  return count;
+}
+
+function writeColors(out: Uint8Array, mode: MapMode): void {
+  const ramp = mode === 'heatmap' ? HEATMAP : EXPLORATION;
+  const alpha = mode === 'heatmap' ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
+  for (let i = 0; i < nSites; i++) {
+    const v = visitCount[i];
+    const o = 4 * i;
+    if (v === 0) {
+      out[o + 3] = 0;
+      continue;
+    }
+    const c = ramp[band(v)];
+    out[o] = c[0];
+    out[o + 1] = c[1];
+    out[o + 2] = c[2];
+    out[o + 3] = alpha;
+  }
+}
+
+/** Earliest visit to site i by any of the selected groups; 0xffffffff when never. */
+function firstTsUnder(i: number, groups: number[]): number {
+  let best = 0xffffffff;
+  for (let g = 0; g < groups.length; g++) {
+    const t = firstTsByGroup[groups[g]][i];
+    if (t < best) best = t;
+  }
+  return best;
+}
+
+function computeExtras(req: QueryRequest, groupSet: Set<number>): QueryExtras {
+  // Per-activity new ground UNDER THE CURRENT SPORT FILTER. The artifacts' newGroundM is a
+  // global, unfiltered figure, so using it here would contradict the headline number.
+  const selected = activities.filter((a) => qualifies(a, req.t0, req.t1, groupSet));
+  const perActivityNewM: Array<{ idx: number; newM: number }> = [];
+  for (const a of selected) {
+    let m = 0;
+    const from = actOffsets[a.idx];
+    const to = actOffsets[a.idx + 1];
+    for (let k = from; k < to; k++) {
+      const s = touchSiteIds[k];
+      if (firstTsUnder(s, req.groups) === a.startTs && siteMintAct[s] === a.idx) m += siteCreditCm[s] / 100;
+    }
+    perActivityNewM.push({ idx: a.idx, newM: m });
+  }
+  perActivityNewM.sort((x, y) => y.newM - x.newM);
+
+  // Buckets by the athlete's own local calendar, monthly under three years and yearly above.
+  const spanYears = (req.t1 - req.t0) / (365.25 * 86400);
+  const monthly = spanYears < 3;
+  const buckets = new Map<number, { newM: number; totalM: number }>();
+  const newByIdx = new Map<number, number>(perActivityNewM.map((r) => [r.idx, r.newM]));
+  for (const a of selected) {
+    const d = new Date(a.startDateLocal);
+    const key = monthly ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth()) : Date.UTC(d.getUTCFullYear(), 0);
+    const b = buckets.get(key) ?? { newM: 0, totalM: 0 };
+    b.newM += newByIdx.get(a.idx) ?? 0;
+    b.totalM += a.distanceM;
+    buckets.set(key, b);
+  }
+  const byBucket = [...buckets.entries()]
+    .sort((x, y) => x[0] - y[0])
+    .map(([bucketStart, v]) => ({ bucketStart: bucketStart / 1000, ...v }));
+
+  // Per-group figures need their own fold each: ground covered by two sports belongs to both
+  // rows, so per-group numbers cannot be sliced out of one combined result.
+  const byGroup: GroupRow[] = [];
+  const savedT0 = foldT0;
+  const savedT1 = foldT1;
+  const savedKey = foldGroupKey;
+  for (const g of req.groups) {
+    const one = new Set([g]);
+    runFold({ ...req, incremental: false }, one);
+    let distinctM = 0;
+    let newM = 0;
+    for (let i = 0; i < nSites; i++) {
+      if (visitCount[i] > 0) distinctM += siteCreditCm[i] / 100;
+      const ft = firstTsByGroup[g][i];
+      if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
+    }
+    let totalM = 0;
+    for (const a of activities) if (a.group === g && a.startTs >= req.t0 && a.startTs <= req.t1) totalM += a.distanceM;
+    if (totalM > 0 || distinctM > 0) byGroup.push({ group: g, distinctM, newM, totalM });
+  }
+  // Restore the combined fold the caller expects.
+  runFold({ ...req, incremental: false }, groupSet);
+  foldT0 = savedT0;
+  foldT1 = savedT1;
+  foldGroupKey = savedKey;
+
+  return { perActivityNewM: perActivityNewM.slice(0, 20), byBucket, byGroup };
+}
+
+function handleQuery(req: QueryRequest): void {
+  if (!manifest) return;
+  const groupSet = new Set(req.groups);
+
+  const activityCountAll = runFold(req, groupSet);
+  const extras = req.drawer ? computeExtras(req, groupSet) : undefined;
+  if (req.drawer) runFold({ ...req, incremental: false }, groupSet);
+
+  const slot: 0 | 1 = slotFree[0] ? 0 : 1;
+  slotFree[slot] = false;
+  const colors = colorSlots[slot]!;
+
+  let distinctM = 0;
+  let newM = 0;
+  const vp = req.viewport;
+  for (let i = 0; i < nSites; i++) {
+    const v = visitCount[i];
+    const visible = !vp || inViewport(i, vp);
+    if (v > 0 && visible) distinctM += siteCreditCm[i] / 100;
+    if (visible) {
+      const ft = firstTsUnder(i, req.groups);
+      if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
+    }
+  }
+  writeColors(colors, req.mode);
+
+  let totalM: number | null = 0;
+  let activityCount = activityCountAll;
+  if (vp) {
+    totalM = null;
+    activityCount = activities.filter(
+      (a) =>
+        qualifies(a, req.t0, req.t1, groupSet) &&
+        a.bbox[0] <= xToLng(vp.maxX / 100) &&
+        a.bbox[2] >= xToLng(vp.minX / 100) &&
+        a.bbox[1] <= yToLat(vp.maxY / 100) &&
+        a.bbox[3] >= yToLat(vp.minY / 100),
+    ).length;
+  } else {
+    for (const a of activities) if (qualifies(a, req.t0, req.t1, groupSet)) totalM += a.distanceM;
+  }
+
+  const buf = colors.buffer as ArrayBuffer;
+  post({ type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, extras }, [buf]);
+}
+
+async function loadTracks(): Promise<void> {
+  if (!manifest) return;
+  const buf = await fetchBuffer(`/artifacts/${manifest.files.tracks.path}`, () => {});
+  const b = manifest.files.tracks.blocks;
+  const trackOffsets = (view(buf, b.trackOffsets) as Uint32Array).slice();
+  const px = (view(buf, b.px) as Int32Array).slice();
+  const py = (view(buf, b.py) as Int32Array).slice();
+  const flag = (view(buf, b.flag) as Uint8Array).slice();
+  post({ type: 'tracks', trackOffsets, px, py, flag }, [
+    trackOffsets.buffer,
+    px.buffer,
+    py.buffer,
+    flag.buffer,
+  ]);
+}
+
+self.onmessage = (e: MessageEvent<WorkerIn>) => {
+  const msg = e.data;
+  switch (msg.type) {
+    case 'init':
+      init().catch((err) => post({ type: 'error', kind: 'failed', message: String(err) }));
+      break;
+    case 'query':
+      try {
+        handleQuery(msg);
+      } catch (err) {
+        post({ type: 'error', kind: 'failed', message: String(err) });
+      }
+      break;
+    case 'release':
+      colorSlots[msg.slot] = new Uint8Array(msg.colors);
+      slotFree[msg.slot] = true;
+      break;
+    case 'loadTracks':
+      loadTracks().catch((err) => post({ type: 'error', kind: 'failed', message: String(err) }));
+      break;
+  }
+};
+
+export { SPORT_GROUPS };

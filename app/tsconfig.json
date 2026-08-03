@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": { "@um/ledger": ["../packages/ledger/src/index.ts"] }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

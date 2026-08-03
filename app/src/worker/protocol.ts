@@ -1,0 +1,100 @@
+/** Worker message contract. See docs/data-pipeline.md section 6 step 5. */
+
+import type { ActivitySummary, Manifest } from '@um/ledger';
+
+export type MapMode = 'exploration' | 'heatmap';
+
+export interface Viewport {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export interface QueryRequest {
+  type: 'query';
+  /** Inclusive on both ends, UTC activity start timestamps. */
+  t0: number;
+  t1: number;
+  groups: number[];
+  viewport: Viewport | null;
+  mode: MapMode;
+  /** When true, also compute the drawer extras. Gated so playback never pays for charts. */
+  drawer: boolean;
+  /** Reuse the previous fold, adding only activities newly inside the window. */
+  incremental?: boolean;
+}
+
+export interface BucketRow {
+  bucketStart: number;
+  newM: number;
+  totalM: number;
+}
+
+export interface GroupRow {
+  group: number;
+  distinctM: number;
+  newM: number;
+  totalM: number;
+}
+
+export interface QueryExtras {
+  perActivityNewM: Array<{ idx: number; newM: number }>;
+  byBucket: BucketRow[];
+  byGroup: GroupRow[];
+}
+
+export interface QueryResult {
+  type: 'result';
+  slot: 0 | 1;
+  colors: ArrayBuffer;
+  distinctM: number;
+  newM: number;
+  /** null when the viewport filter is on: a clipped numerator over an unclipped total is
+   *  a meaningless ratio, so the stats card hides it rather than inventing one. */
+  totalM: number | null;
+  activityCount: number;
+  extras?: QueryExtras;
+}
+
+export interface ReleaseBuffer {
+  type: 'release';
+  slot: 0 | 1;
+  colors: ArrayBuffer;
+}
+
+export interface LoadProgress {
+  type: 'progress';
+  loaded: number;
+  total: number;
+}
+
+export interface ReadyMessage {
+  type: 'ready';
+  manifest: Manifest;
+  activities: ActivitySummary[];
+  /** Segment endpoints in lng/lat, ready for a deck.gl LineLayer binary attribute. */
+  sourcePositions: Float32Array;
+  targetPositions: Float32Array;
+  nSites: number;
+  /** Site metadata the main thread needs for hover tooltips. */
+  siteMintTs: Uint32Array;
+  siteMintAct: Uint32Array;
+}
+
+export interface ErrorMessage {
+  type: 'error';
+  kind: 'no-artifacts' | 'format-mismatch' | 'params-mismatch' | 'failed';
+  message: string;
+}
+
+export interface TracksMessage {
+  type: 'tracks';
+  trackOffsets: Uint32Array;
+  px: Int32Array;
+  py: Int32Array;
+  flag: Uint8Array;
+}
+
+export type WorkerOut = QueryResult | ReadyMessage | ErrorMessage | LoadProgress | TracksMessage;
+export type WorkerIn = QueryRequest | ReleaseBuffer | { type: 'init' } | { type: 'loadTracks' };

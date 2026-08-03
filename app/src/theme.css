@@ -1,0 +1,481 @@
+/*
+ * Design tokens. See SPEC.md section 6.2.
+ *
+ * The map ramps are not arbitrary: both were validated as ordinal ramps against the #12141a
+ * map surface (monotone lightness, adjacent lightness gaps >= 0.06, single hue, dimmest step
+ * clearing 3:1 contrast at 3.41:1), and the gold frontier accent separates from every ramp
+ * step by CVD delta-E 24-35. If you change a value, re-validate rather than eyeballing.
+ */
+
+:root {
+  --map-surface: #12141a;
+  --panel-bg: rgba(20, 23, 30, 0.82);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8a8a80;
+
+  /* Exploration: a reserved accent for the frontier, plus a single-hue ramp for depth. */
+  --frontier: #eda100;
+  --repeat-1: #256abf;
+  --repeat-2: #5598e7;
+  --repeat-3: #9ec5f4;
+  --ambiguous: #4a4a52;
+
+  /* Heatmap: the same hue as a five-step ordinal ramp, no frontier accent. */
+  --heat-1: #256abf;
+  --heat-2: #3987e5;
+  --heat-3: #6da7ec;
+  --heat-4: #9ec5f4;
+  --heat-5: #cde2fb;
+
+  /* Charts: categorical slots, capped at 3 plus Other. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+
+  --radius: 10px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--map-surface);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.panel {
+  position: absolute;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  z-index: 10;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.panel h2 button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+label.check input {
+  accent-color: var(--series-1);
+  cursor: pointer;
+}
+
+label.check .count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.chip {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.chip[aria-pressed='true'] {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: #fff;
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stat-sub {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 0;
+}
+
+hr.rule {
+  border: none;
+  border-top: 1px solid var(--panel-border);
+  margin: 10px 0;
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+button.ghost:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(0, 0, 0, 0.5) !important;
+  font-size: 10px;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--text-muted) !important;
+}
+
+/* ------------------------------------------------------------------ *
+ * Stats drawer and charts. See SPEC.md section 6.5.
+ *
+ * Grid and axes are one recessive gray at low opacity; marks are thin; text always wears a
+ * text token, never a series color. Series colors appear only on marks and on the small keys
+ * that sit beside a label.
+ * ------------------------------------------------------------------ */
+
+.stats-drawer {
+  top: 12px;
+  bottom: 150px; /* clears the scrubber */
+  left: 12px;
+  width: calc(50vw - 24px);
+  min-width: 300px;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.stats-drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Bleed to the panel edge so scrollbar and hover rows reach it, keeping the inner padding. */
+  margin: 0 -14px;
+  padding: 0 14px;
+}
+
+.chart-figure {
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.chart-figure:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.chart-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chart-sub {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  max-width: 52ch;
+}
+
+.chart-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+.chart-empty {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+button.chart-toggle {
+  flex: none;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+
+.chart-body {
+  position: relative;
+}
+
+.chart-plot {
+  position: relative;
+  width: 100%;
+}
+
+.chart-plot svg {
+  display: block;
+}
+
+.chart-grid line {
+  stroke: var(--text-muted);
+  stroke-opacity: 0.16;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-axis line {
+  stroke: var(--text-muted);
+  stroke-opacity: 0.32;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-axis text {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-crosshair {
+  stroke: var(--text-muted);
+  stroke-opacity: 0.5;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-endlabel {
+  fill: var(--text-secondary);
+  font-size: 10px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 6px;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chart-legend i {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: rgba(12, 14, 19, 0.95);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.chart-tip .tip-head {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.chart-tip .tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.6;
+}
+
+.chart-tip .tip-row i {
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+
+/* Values lead, labels follow: the reader already knows the series and wants the number. */
+.chart-tip .tip-row b {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table-wrap {
+  overflow-x: auto;
+}
+
+/* Only the chart table views cap their height: they can run to a row per month, and the
+   drawer's own tables are short enough to scroll with the drawer instead of trapping it. */
+.chart-table-wrap.scroll {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.chart-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.chart-table.fixed {
+  table-layout: fixed;
+}
+
+.chart-table th,
+.chart-table td {
+  padding: 4px 6px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.chart-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #171a21;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.chart-table th:first-child,
+.chart-table td:first-child {
+  text-align: left;
+  padding-left: 0;
+}
+
+.chart-table tbody th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.chart-table td {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table tbody th.name {
+  color: var(--text-primary);
+}
+
+.chart-table tr.row-click {
+  cursor: pointer;
+}
+
+.chart-table tr.row-click:hover th,
+.chart-table tr.row-click:hover td,
+.chart-table tr.row-click:focus-visible th,
+.chart-table tr.row-click:focus-visible td {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chart-table tr.row-click:focus-visible {
+  outline: 1px solid var(--series-1);
+  outline-offset: -1px;
+}
+
+/* Bar-in-cell: a wash behind the value, not a second column of ink. */
+.chart-table td.cellbar {
+  position: relative;
+}
+
+.chart-table td.cellbar .cellbar-fill {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 2px;
+  background: var(--series-1);
+  opacity: 0.24;
+  pointer-events: none;
+}
+
+.chart-table td.cellbar span {
+  position: relative;
+}
+
+.sport-key {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 2px;
+  flex: none;
+}

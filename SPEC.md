@@ -1,0 +1,782 @@
+# unique-miles
+
+A personal, local-first web tool that pulls one athlete's Strava history and answers a
+question no other heatmap answers: **how much distinct ground have I actually covered?**
+
+It renders a heatmap of everywhere you have been, and computes the deduplicated mileage
+behind it — filterable by time, sport, and map viewport, with time-lapse playback of how
+your coverage grew.
+
+This document is the master spec. Two companion documents carry the detail:
+
+| Document | Contents |
+|---|---|
+| `docs/algorithm.md` | The SiteLedger v2 uniqueness algorithm: parameters, pseudocode, failure modes, test suite |
+| `docs/data-pipeline.md` | Strava app setup, auth, sync CLI, on-disk formats, artifact binary layouts |
+| `docs/build-plan.md` | Ordered implementation milestones with acceptance criteria |
+
+Read this file first, then `docs/build-plan.md`, then the other two as each milestone
+requires them.
+
+---
+
+## 1. Product definition
+
+### 1.1 The core idea
+
+Every heatmap tool (Strava's own, statshunters, bifurkate) shows you *where* you went.
+None of them tell you how much of it was *new*. If you run the same 5-mile loop 200 times,
+a heatmap shows a bright loop and your annual total says 1,000 miles. The honest answer to
+"how much ground have you covered" is 5 miles.
+
+unique-miles computes both numbers and shows them side by side, and colors the map so the
+distinction is visible: the ground you have covered exactly once (your frontier) is
+rendered in a reserved accent color; ground you have worn in is rendered in a
+brightness ramp by how many times you have been there.
+
+### 1.2 The two mileage numbers
+
+These are different questions and the UI must never conflate them. Both are always
+displayed, with equal billing.
+
+**Distinct ground (semantics A)** — how much non-overlapping ground did I cover inside the
+current selection, ignoring everything outside it? Filter to 2024 and this answers "in
+2024 I covered 312 distinct miles" — a road run 40 times in 2024 counts once.
+
+**New ground (semantics B)** — how much of the current selection was ground I had *never*
+covered before, at any point in my history? Filter to 2024 and this answers "84 of those
+miles were places I had never been." Necessarily `B <= A`.
+
+Also always shown: **total logged** (the raw sum of recorded distances of the GPS activities
+in the selection — excluded trainer, manual, and virtual activities are not counted, so this
+will not match Strava's own yearly totals) and **repeat ratio** (`1 - A/total`).
+
+Scrubbing the timeline with B as your eye's anchor tells the exploration story: big B in
+your first year in a city, shrinking B as you exhaust the neighborhood, a spike when you
+travel. A tells you how much ground a given period actually touched.
+
+### 1.3 Locked product decisions
+
+These were decided during spec review. Do not relitigate them during implementation.
+
+| Decision | Choice |
+|---|---|
+| Uniqueness method | Geometry-only (SiteLedger v2). No OpenStreetMap, no map matching, no routing engine. |
+| Data ingestion | Strava API only. OAuth once, then resumable rate-limited backfill, then incremental sync. |
+| Strava app | A **new, dedicated** Strava API application. Must not reuse the credentials the another tool project uses (see 4.2). |
+| Audience | Single athlete (the repo owner). No accounts, no multi-user state, no sharing. |
+| Runtime | Local-first: everything runs on the owner's Mac. The web app is a pure static build that reads precomputed artifacts over HTTP, so it can be dropped on a static host later without restructuring. |
+| Heavy compute | Runs in a Node build script, not the browser. The browser only runs query-time folds. |
+| Layout | Full-bleed map with floating translucent control panels. |
+| Default map mode | Exploration (first-visit vs repeat coloring). Classic frequency heatmap is one toggle away. |
+| v1 feature set | Heatmap + both mileage numbers + time/sport/viewport filters + time-lapse playback + exploration/heatmap modes + stats dashboard. |
+
+### 1.4 Non-goals for v1
+
+Explicitly out of scope. Do not build these; do not add extension points for them beyond
+what is already noted.
+
+- OpenStreetMap integration of any kind: no untraveled-roads overlay, no "percent of city
+  complete", no per-street names. (Deferred: see 3.5 for the one hook that keeps it possible.)
+- Explorer-tile gamification (zoom-14 tiles, max square, max cluster, badges).
+- Multi-user support, login, sharing, public links.
+- Strava webhooks. Sync is a manual command.
+- Route planning, segment analysis, training metrics, heart rate, power.
+- Mobile-first design. It must not be broken on a tablet, but the target is a desktop browser.
+- Any upload of GPS data to a third-party service.
+
+---
+
+## 2. How it works, end to end
+
+```
+  Strava API                Local disk                  Node build              Browser
+  ----------                ----------                  ----------              -------
+  /athlete/activities  -->  data/summaries.json
+  /activities/{id}/       \
+    streams            -->  data/streams/{id}.json.gz
+                                   |
+                                   v
+                            scripts/build-ledger.ts
+                            (packages/ledger, pure TS)
+                                   |
+                                   v
+                            app/public/artifacts/
+                              manifest.json
+                              sites.bin        --------> load once into a Web Worker
+                              touches.bin      -------->   |
+                              activities.json  -------->   | fold over selected activities
+                              tracks.bin (lazy) ------->   v
+                                                         color buffer + 4 stat numbers
+                                                           |
+                                                           v
+                                                    deck.gl LineLayer over
+                                                    MapLibre dark basemap
+```
+
+Four commands, in order:
+
+```bash
+npm run auth      # one time: OAuth dance, writes .strava-token.json
+npm run sync      # crawls new activities + their GPS streams into data/  (resumable)
+npm run build     # runs the ledger over data/ into app/public/artifacts/, then builds the app
+npm run dev       # serves the app at localhost:5173
+```
+
+`npm run sync && npm run build` is the routine refresh after new activities.
+
+---
+
+## 3. Architecture
+
+### 3.1 Repo layout
+
+```
+unique-miles/
+  SPEC.md
+  CLAUDE.md                      operational notes (creds location, commands, gotchas)
+  docs/
+    algorithm.md
+    data-pipeline.md
+    build-plan.md
+  package.json                   npm workspaces root
+  package-lock.json
+  eslint.config.js               flat config
+  tsconfig.json                  base config, project references
+  .gitignore                     .env.local, .strava-token.json, data/, app/public/artifacts/
+  .env.local                     GITIGNORED. STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET
+  .strava-token.json             GITIGNORED. rotated refresh token, written by auth + sync
+
+  packages/
+    strava/                      @um/strava - thin Strava API client
+      src/{auth,client,crawl,types}.ts
+      src/__tests__/
+    ledger/                      @um/ledger - the algorithm. PURE TS, NO NODE APIS.
+      src/{preprocess,match,ledger,artifacts,geo,params,types}.ts
+      src/__tests__/            synthetic adversarial suite (see docs/algorithm.md section 10)
+
+  scripts/                       run with tsx
+    auth.ts                      one-time OAuth, writes .strava-token.json
+    sync.ts                      resumable crawl of summaries + streams into data/
+    build-ledger.ts              data/ -> app/public/artifacts/
+    stats.ts                     prints a text summary of the current artifacts (debugging)
+
+  app/                           Vite + React + TypeScript, static build
+    index.html
+    vite.config.ts
+    public/artifacts/            GITIGNORED. build output consumed by the app
+    src/
+      main.tsx
+      App.tsx
+      state/store.ts             zustand store + URL-hash sync
+      worker/query.worker.ts     loads artifacts, runs folds, returns stats + color buffer
+      worker/queryClient.ts      typed postMessage wrapper around the worker
+      map/MapView.tsx            MapLibre + deck.gl overlay
+      map/layers.ts              coverage layer, active-track layer, color ramps
+      panels/FilterPanel.tsx
+      panels/StatsCard.tsx
+      panels/StatsDrawer.tsx
+      panels/Legend.tsx
+      panels/Scrubber.tsx        histogram + brush + playback transport
+      charts/                    hand-rolled SVG chart primitives
+      theme.css                  design tokens (see section 6.2)
+
+  data/                          GITIGNORED
+    summaries.json               all activity summaries, keyed by id
+    streams/{id}.json.gz         per-activity latlng/time/altitude streams
+    sync-state.json              cursor + per-activity fetch status for resumability
+```
+
+### 3.2 Stack and conventions
+
+Match the conventions already in use across this workspace:
+
+- TypeScript everywhere. `npm` with `package-lock.json` (never pnpm or yarn).
+- npm workspaces for `packages/*` and `app`.
+- Vite + React 19 + TypeScript for the app (the small-client-tool lane, like `drainage`
+  and `swipe-sort`), **not** Next.js — there is no server.
+- `zustand` for app state.
+- `zod` to validate every Strava API response at the boundary.
+- `vitest --run` for tests, `__tests__/` directories, fixtures alongside.
+- `tsx` to run scripts.
+- eslint flat config; `tsc --noEmit` for typecheck.
+- npm scripts: `dev`, `build`, `preview`, `lint`, `typecheck`, `test`, plus `auth`, `sync`,
+  `build:ledger`, `stats`.
+- Atomic conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`)
+  straight to `main`. No PRs. No `Co-Authored-By` lines.
+- No emojis in code, comments, docs, or UI copy.
+
+New dependencies beyond the above, all justified:
+
+| Package | Why |
+|---|---|
+| `maplibre-gl` | Vector basemap. Free, no API key with OpenFreeMap. |
+| `deck.gl` (`@deck.gl/core`, `@deck.gl/layers`, `@deck.gl/mapbox`) | Renders roughly a million line segments with binary attributes and supports swapping just the color buffer on every filter change. MapLibre alone cannot repaint that many features interactively. |
+| `pako` | gzip for the on-disk stream cache. |
+
+Do **not** add: a charting library (charts are hand-rolled SVG, see 6.5), turf.js (the
+geometry needed is a dozen lines and turf's per-call overhead is the wrong shape for
+million-point loops), h3-js (benchmarked at ~0.4M ops/s with a known regression to ~36k;
+an integer Mercator grid is orders of magnitude faster and is what the algorithm specifies).
+
+### 3.3 Why the heavy compute runs in Node
+
+The full-history ledger build is a single-threaded pass over a few million points that
+takes seconds. Running it in a Node script instead of a browser worker means:
+
+- The algorithm package is a pure function of `(sorted activities, params)`, unit-testable
+  with `vitest` and golden files, with no worker lifecycle, no `postMessage` marshalling,
+  and no IndexedDB quota handling.
+- The browser only ever loads finished typed arrays and runs simple folds over them, which
+  is the part that genuinely has to be interactive.
+- The static-deploy-later path works unchanged: artifacts are just files.
+
+The cost is that adding one activity requires re-running `npm run build`, which takes
+seconds. That is an acceptable trade for a tool refreshed a few times a week.
+
+`packages/ledger` must therefore contain **no Node APIs** (`fs`, `path`, `Buffer`). It takes
+plain data in and returns `ArrayBuffer`s and plain objects out. `scripts/build-ledger.ts`
+owns all I/O. This keeps the door open to running it in a browser worker later without a
+rewrite.
+
+### 3.4 The query engine
+
+Everything interactive reduces to two linear passes over typed arrays. There is no spatial
+index at query time, no binary search, no bitset library. Measured worst case at the reference
+scale of 3,000 activities and roughly 1M sites is 20-40 ms, which is inside the 100 ms
+interactivity budget with room to spare. Do not replace this with something cleverer.
+
+**Pass 1 — the fold.** Given the selected time window and sport groups, iterate the
+activities that qualify — an activity qualifies iff `t0 <= startTs <= t1`, **inclusive on both
+ends**, deliberately matching the inclusive test in pass 2 so that `B <= A` is provable at
+window boundaries. For each, walk its sorted list of touched site ids from
+`touches.bin` and increment `visitCount[siteId]` (a `Uint16Array` of length `nSites`,
+zeroed per query). Because each activity's touch list is deduplicated at build time, a
+site's visit count is the **number of distinct qualifying activities that covered that
+ground** — which is exactly what the map should color by. Total work equals the number of
+`(activity, site)` touch pairs in the selection, at most ~3.5M.
+
+**Pass 2 — the scan.** Walk all `nSites` sites once:
+
+- If `visitCount[i] > 0` and the site is inside the viewport (when the viewport filter is
+  on), add `creditCm[i]` to **distinct ground (A)**.
+
+  The viewport test is a plain axis-aligned box comparison in Web Mercator centimetres, the
+  space `sites.bin` already stores, so it costs two comparisons per site and no conversion. The
+  main thread sends `{ minX, minY, maxX, maxY }` in that space, computed by taking MapLibre's
+  `map.getBounds()` (which returns the bounding box of the visible region, already correct for
+  a rotated or pitched map) and projecting its corners. A rotated map therefore filters by a
+  slightly larger box than the literal on-screen quadrilateral. That is the intended behavior:
+  a site just off the corner of a tilted view still counts, which is far less surprising than
+  numbers that shift when you spin the map.
+- Compute `firstTs = min over selected groups g of firstTsByGroup[g][i]`. If
+  `t0 <= firstTs <= t1` and the site passes the viewport test, add `creditCm[i]` to
+  **new ground (B)**.
+- Write the site's RGBA bytes into the color buffer from `visitCount[i]` and the active map
+  mode.
+
+Pass 2 also produces the color buffer, so rendering costs nothing extra.
+
+**Playback optimization.** Both window modes fold incrementally, keeping the `visitCount`
+array between frames along with two cursors into the `startTs`-sorted activity list. When `t1`
+advances from `prevT1`, fold in the activities with `prevT1 < startTs <= t1` (incrementing
+`visitCount` for each touched site). In Sliding mode, also fold *out* the activities leaving
+at the `t0` edge by decrementing. Decrementing is valid precisely because touch lists are
+deduplicated at build time, so every qualifying activity contributes exactly +1 per touched
+site.
+
+Any sport-group change, or any non-monotonic window change — a backward scrub, a preset chip,
+a mode switch — discards the kept `visitCount` and cursors and refolds from scratch. Viewport
+changes do not, since the viewport only affects pass 2. Pass 2 runs every frame regardless.
+This keeps playback frames under about 10 ms.
+
+Semantics note that must be reflected in the UI copy: **the sport filter restricts the
+universe**, it does not post-filter results. Selecting "Foot" computes both numbers as if
+only foot activities existed. That is why `firstTsByGroup` is stored per sport group.
+
+### 3.5 The one hook kept for a future OSM layer
+
+Sites are stable, addressable, chronologically-minted points with a position and bearing.
+If an OSM map-matching layer is ever added, it would attach `(osmWayId, fraction)` to each
+site as an extra column in `sites.bin` without touching the algorithm, the query engine, or
+the UI. Nothing else about v1 needs to anticipate it. Do not build any part of it now.
+
+---
+
+## 4. Data pipeline summary
+
+Full detail in `docs/data-pipeline.md`. The load-bearing points:
+
+### 4.1 Reuse the existing Strava application
+
+Strava allows one API application per account, and the account already has one — the
+registration other tools on the same account share. unique-miles uses the same
+`STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, copied into this project's own gitignored
+`.env.local`.
+
+The Authorization Callback Domain must be `localhost` for `npm run auth` to complete. Strava
+matches on domain rather than port, so the callback at `http://localhost:8721/callback` works
+without further configuration.
+
+Read limits are whatever the shared app is provisioned for: 100 reads per 15 minutes and
+1,000 per day in Single Player Mode, doubled by the self-service upgrade to 10 athletes in
+the API Settings Dashboard. Applying that upgrade is worthwhile and harmless to the other
+consumers.
+
+### 4.2 Sharing one app safely
+
+`an internal design note` documents a real "multi-store hazard": Strava rotates the refresh
+token on every refresh, and independent consumers holding copies of the same token can
+invalidate each other. another tool holds copies in a server-side store (`a shared key`), in `.env.local`,
+and in `.strava-token.json`; the another consumer holds another.
+
+unique-miles becomes another such consumer, so it follows the same self-healing discipline:
+it performs its **own** OAuth authorization, holds its **own** refresh token in its own
+`.strava-token.json`, never reads or writes the another tool's stores, and persists every rotation
+immediately. It also shares the app's rate-limit budget, so a long backfill running alongside
+a another tool sync will make both see 429s — both retry, so this degrades rather than breaks.
+
+Never print, log, or commit token values. `.env.local` and `.strava-token.json` are
+gitignored from the first commit.
+
+### 4.3 Sync
+
+`npm run sync`:
+
+1. Refresh the access token (persist the rotated refresh token immediately — every time,
+   before anything else can fail).
+2. Page `GET /athlete/activities` at `per_page=200` with 300 ms pacing, using `after=` the
+   last-seen start time on subsequent runs. Write `data/summaries.json`.
+3. For every activity that is eligible (see `docs/algorithm.md` section 3 for the exclusion
+   rules) and does not already have a stream file, fetch
+   `GET /activities/{id}/streams?keys=latlng,time,altitude&key_by_type=true` and write
+   `data/streams/{id}.json.gz`. The response wraps each stream in an object; sync extracts
+   the `.data` arrays into the flattened cache format (see `docs/data-pipeline.md` section 3.2).
+4. Track progress in `data/sync-state.json` after every activity so an interrupted run
+   resumes exactly where it stopped.
+5. On HTTP 429, respect `Retry-After` and the `X-ReadRateLimit-Usage` / `X-ReadRateLimit-Limit`
+   headers, sleeping until the next 15-minute window. Print a clear ETA. Never crash on a
+   rate limit; a full backfill is expected to take hours and to be run repeatedly.
+
+Backfill arithmetic at the upgraded limit: one stream request per activity, 200 reads per
+15-minute window, so 2,000 activities is roughly 2.5 hours of wall clock — but that consumes
+essentially the entire 2,000/day read cap once summary paging (about 10 extra reads) is
+counted. Roughly 1,990 activities fit in a single day; above that the daily cap binds, and the
+script must detect it and tell the user to resume tomorrow.
+
+Escape hatch worth knowing but **not** part of the spec'd path: Strava's account-level bulk
+export (Settings > My Account > Download your account) delivers the entire history as
+FIT/GPX/TCX files with no rate limit. If backfill proves painful, importing that ZIP is a
+one-command alternative. Do not build it unless asked.
+
+### 4.4 Artifacts
+
+`npm run build` reads `data/`, runs `packages/ledger`, and writes binary artifacts to
+`app/public/artifacts/`. Exact byte layouts are in `docs/data-pipeline.md` section 5. The
+manifest carries both a `formatVersion` and a hash of the algorithm parameters, and the app
+treats them differently: a `formatVersion` mismatch means the binary blocks are unreadable and
+the app shows the setup card, while a `paramsHash` mismatch is only a staleness warning and
+the app still renders. See `docs/data-pipeline.md` section 6 step 1.
+
+---
+
+## 5. The algorithm, in one page
+
+Complete specification in `docs/algorithm.md`. The summary, so this document stands alone:
+
+Every activity is resampled to a point every 8 metres. Points are processed in strict
+chronological order across the whole history. The tool maintains one append-only table of
+**sites** — accepted representative points, each with a position, a full direction of travel
+(stored over 360 degrees but compared modulo 180 when matching, so opposite travel along the
+same road matches), an altitude, a credit length, and the timestamp it was first covered.
+
+For each resampled point, look up nearby sites whose direction of travel is compatible
+(within 45 degrees):
+
+- A compatible site within **20 m** means this is ground you have covered before. Label the
+  point REPEAT. No new mileage.
+- No compatible site within **30 m** means this is genuinely new ground. Label the point NEW
+  and mint a site immediately, so that later points in the *same* activity can match it (this
+  is what makes an out-and-back count once and 25 laps of a track count as 400 m).
+- In between — 20 to 30 m — is a deliberate dead zone. Label the point AMBIGUOUS: no new
+  mileage and no new site, but attach a visit to the nearest compatible site so the pass
+  still registers on the map and in the distinct-ground number.
+
+That hysteresis band is the single most important design element. It is what stops years of
+GPS jitter along a familiar road from slowly accreting phantom new mileage: to earn credit,
+a point must be *clearly* separated from everything you have covered, not merely at the edge
+of the noise.
+
+Unique mileage is then just the sum of the credit lengths of all minted sites. There is no
+rasterization, so there is no cell-diagonal bias and no corner-clipping error.
+
+Around that core sit the preprocessing steps that make it survive real GPS data: excluding
+virtual and trainer activities, splitting the track wherever a gap or teleport occurs so a
+dropout can never paint coverage, collapsing stationary jitter to a single point, and
+discarding NEW runs shorter than 24 m so that a short multipath burst cannot mint permanent
+phantom ground.
+
+Known honest limitations, which the UI must not paper over:
+
+- Paths less than ~20 m apart merge (a separated bike path beside a road counts as the road).
+- Switchback legs 10-20 m apart merge unless the activity has barometric altitude. This is a
+  genuine failure of any geometry-only method.
+- Roads 20-30 m apart fall in the dead zone and earn nothing; between 30 and about 40 m under
+  urban noise they earn partial, permanent credit. Full credit resumes past roughly 40-45 m.
+- Genuinely new fragments shorter than 24 m are never credited.
+- Small closed loops — cul-de-sac bulbs and park loops under about 100 m around — are only
+  partially credited.
+- Excluded activities (trainer, manual, virtual, no GPS) are absent from every number,
+  including "total logged", so annual totals will not match Strava's.
+
+Every one of these is bounded, deterministic, and documented in the app's own "How this is
+calculated" panel.
+
+---
+
+## 6. User interface
+
+### 6.1 Layout
+
+Full-bleed map. Everything else floats over it in translucent panels with a subtle blur and
+a 1 px hairline border.
+
+```
++--------------------------------------------------------------------------+
+| +-- FILTERS ------------+                     +-- STATS ---------------+ |
+| | Sport                 |                     |  312.4 mi   84.2 mi    | |
+| |  [x] Foot   [x] Ride  |                     |  distinct   new ground | |
+| |  [ ] Ski    [ ] Water |                     |  ---------------------- | |
+| |  [ ] Other            |                     |  1,842 mi total logged | |
+| |                       |                     |  83% repeat            | |
+| | Mode                  |                     |  [ ] Limit to map view | |
+| |  (o) Exploration      |                     |  Stats and charts  >   | |
+| |  ( ) Heatmap          |                     +------------------------+ |
+| +-----------------------+                                                |
+|                                                                          |
+|                              M A P                                       |
+|                                                                          |
+|                                              +-- LEGEND --------------+  |
+|                                              | == frontier   1 visit  |  |
+|                                              | == familiar   2-4      |  |
+|                                              | == known      5-9      |  |
+|                                              | == worn in    10+      |  |
+|                                              +------------------------+  |
+|                                          (exploration mode shown; heatmap |
+|                                           mode has five rows -- see 6.4)  |
+| +-- SCRUBBER ----------------------------------------------------------+ |
+| |  _.|||._..||||_.._|||||||._..|||._      [ >  ] [1x] [expanding v]    | |
+| |  [========|##############|=====================]                     | |
+| |  2014        Jan 2019      Nov 2022                       2026       | |
+| |  All time | 2026 | 2025 | 2024 | ... | Last 12 months                | |
+| +----------------------------------------------------------------------+ |
++--------------------------------------------------------------------------+
+```
+
+Panel behavior:
+
+- All panels are collapsible to a title bar. Collapsed state persists in the URL hash.
+- On viewports narrower than 900 px, the filter and stats panels collapse by default.
+- The map is never covered by more than about a third of the viewport.
+
+### 6.2 Design tokens
+
+Dark UI throughout — the map is dark and floating panels must not glare. Define these once
+in `app/src/theme.css` as custom properties and reference them by role.
+
+```css
+:root {
+  --map-surface:      #12141a;  /* the dark basemap's background; the chart surface for validation */
+  --panel-bg:         rgba(20, 23, 30, 0.82);
+  --panel-border:     rgba(255, 255, 255, 0.10);
+  --text-primary:     #ffffff;
+  --text-secondary:   #c3c2b7;
+  --text-muted:       #8a8a80;
+
+  /* Exploration mode: reserved accent for the frontier + a single-hue ordinal ramp for depth */
+  --frontier:         #eda100;  /* exactly 1 visit */
+  --repeat-1:         #256abf;  /* 2-4 visits   */
+  --repeat-2:         #5598e7;  /* 5-9 visits   */
+  --repeat-3:         #9ec5f4;  /* 10+ visits   */
+  --ambiguous:        #4a4a52;  /* deliberately recessive; used only by the active-track layer */
+
+  /* Heatmap mode: the same hue as a five-step ordinal ramp, no frontier accent */
+  --heat-1:           #256abf;  /* 1 visit      */
+  --heat-2:           #3987e5;  /* 2-4 visits   */
+  --heat-3:           #6da7ec;  /* 5-9 visits   */
+  --heat-4:           #9ec5f4;  /* 10-24 visits */
+  --heat-5:           #cde2fb;  /* 25+ visits   */
+
+  /* Charts: categorical slots, capped at 3 + Other */
+  --series-1:         #3987e5;
+  --series-2:         #d95926;
+  --series-3:         #199e70;
+}
+```
+
+These are not arbitrary. Both blue ramps were validated as ordinal ramps against the `#12141a`
+map surface: monotone lightness, all adjacent lightness gaps at or above 0.06, single hue (2-3
+degree spread), and the dimmest step clearing 3:1 contrast at 3.41:1. The gold frontier accent
+separates from every ramp step by CVD delta-E 24 to 35 (OKLab x100, target 8 or more), so the
+frontier stays unmistakable under protanopia and deuteranopia. The chart categorical trio
+passes all-pairs CVD and normal-vision floors in both light and dark.
+
+If any of these values change, re-run the validator rather than eyeballing the result.
+
+Rules that follow from this and must be honored:
+
+- The frontier color is **reserved**. Never reuse gold for a chart series, a button, or a
+  hover state.
+- The repeat ramp is one hue. Do not insert a teal, green, or red step "for contrast" —
+  that breaks the sequential encoding.
+- On a dark surface, brighter means more. Higher visit counts get brighter steps, so
+  well-worn ground reads as glowing and the frontier reads as a distinct color rather than
+  a distinct brightness.
+- Legend is always present. Color never carries meaning alone: the legend labels the bands,
+  and hover reports exact counts.
+- Text wears text tokens, never a data color.
+
+### 6.3 Map layers
+
+Basemap: MapLibre GL JS with the OpenFreeMap Dark style
+(`https://tiles.openfreemap.org/styles/dark`). Free, unlimited, no API key. If it fails to
+load, fall back to a flat `--map-surface` background and show a small non-blocking notice —
+the coverage layer is the point, the basemap is context.
+
+Coverage layer (deck.gl `LineLayer`, added via `MapboxOverlay`): one short oriented segment
+per site, centered on the site position, oriented along its bearing, with length equal to
+the resample spacing. Roughly a million segments at 8 m each reconstruct the covered network
+with no visible gaps. This layer *is* the heatmap, and because it draws sites rather than raw
+tracks, what you see is exactly what the mileage numbers count.
+
+- Positions are computed once at artifact load into `Float32Array`s and never change.
+- Color is a `Uint8Array` of RGBA written by the query worker on every filter change. Pass
+  the same position arrays by reference so deck.gl re-uploads only the color buffer.
+- `widthUnits: 'meters'`, `getWidth: 7`, `widthMinPixels: 1.2`, `widthMaxPixels: 8`.
+- Sites with `visitCount === 0` under the current filter get alpha 0.
+- In heatmap mode, enable additive blending
+  (`parameters: { blend: true, blendFunc: [SRC_ALPHA, ONE] }`) so overlapping density
+  accumulates into a glow. In exploration mode use normal alpha blending so the frontier
+  color stays true.
+
+Active-track layer (deck.gl `PathLayer`): during time-lapse playback, the single activity
+currently being played is drawn on top in near-white at higher width, so you can see the
+run that is discovering the ground. Also used when an activity is selected from the stats
+drawer. Loads `tracks.bin` lazily on first need. This is the only layer with access to
+per-sample labels, so it is the only consumer of `--ambiguous`: points flagged AMBIGUOUS or
+NONE draw in that color while NEW and REPEAT stay near-white. The coverage layer cannot use
+it, because `touches.bin` carries no labels.
+
+Picking: hovering the coverage layer shows a tooltip with the site's first-covered date,
+the activity that first covered it, and the visit count under the current filter.
+
+### 6.4 Controls
+
+**Sport filter.** Multi-select checkboxes over sport *groups*, not raw Strava sport types:
+
+| Group | Strava `sport_type` values |
+|---|---|
+| Foot | Run, TrailRun, Walk, Hike, Snowshoe, Wheelchair |
+| Ride | Ride, GravelRide, MountainBikeRide, EBikeRide, Handcycle, Velomobile |
+| Ski | NordicSki, AlpineSki, BackcountrySki, RollerSki |
+| Water | Kayaking, Canoeing, Rowing, StandUpPaddling, Surfing, Swim |
+| Other | anything else with usable GPS |
+
+Default: all groups selected. Each label shows the count of *included* activities in that
+group — excluded trainer, manual, virtual, and GPS-less activities are absent from the
+artifacts entirely and are counted nowhere.
+
+**Mode toggle.** Exploration (default) or Heatmap, both driven by the same filtered visit
+count per site:
+
+| Visits | Exploration | alpha | Heatmap | alpha |
+|---|---|---|---|---|
+| 0 | hidden | 0 | hidden | 0 |
+| 1 | `--frontier` | 255 | `--heat-1` | 90 |
+| 2-4 | `--repeat-1` | 255 | `--heat-2` | 90 |
+| 5-9 | `--repeat-2` | 255 | `--heat-3` | 90 |
+| 10-24 | `--repeat-3` | 255 | `--heat-4` | 90 |
+| 25+ | `--repeat-3` | 255 | `--heat-5` | 90 |
+
+Alpha is part of the encoding, not a detail. Exploration mode uses normal alpha blending at
+full opacity so the band colors read true. Heatmap mode uses additive blending, where alpha
+controls how fast overlapping geometry saturates — at 255 every crossing clips to white within
+two or three overlaps and the five-step ramp is destroyed. 90 is the starting value; tune it
+once against real data and record the result here.
+
+The two modes share the 2-4 / 5-9 breakpoints so the legend stays learnable, but they diverge
+above 10: exploration has four bands (its top band is 10+) while heatmap has five (10-24 and
+25+). `Legend.tsx` must render a different row set per mode — it cannot be a static list.
+Exploration labels: frontier / familiar / known / worn in. Heatmap labels are the visit ranges
+themselves.
+
+**Timeline scrubber.** Along the bottom:
+
+- A histogram of activity distance per month across the full history, drawn in
+  `--text-muted` at low opacity, which doubles as the brush track. It **responds to the sport
+  filter but not to the time window** — it is the map of the territory you are scrubbing
+  through, so it must show the whole history while reflecting which sports are in play.
+- A two-handle brush. Drag either handle, or drag the middle to slide the window.
+- Preset chips: All time, Last 12 months, and one per calendar year.
+- Readouts of the exact window start and end dates.
+- Transport controls: play/pause, speed (0.5x, 1x, 2x, 4x), and a window-mode select of
+  Expanding (t0 pinned at history start, t1 advances) or Sliding (fixed-width window moves).
+
+At 1x, playback advances history time at **one month per real second**, pro-rated per frame by
+elapsed wall-clock milliseconds so that playback speed is independent of frame rate. The other
+presets scale that rate. In Expanding mode the rate applies to `t1`; in Sliding mode it applies
+to the fixed-width window's position. Reaching the end of history pauses playback with the
+window at its final position.
+
+Calendar bucketing — the monthly histogram and the per-period bar chart — derives from each
+activity's `startDateLocal` (Strava's `start_date_local`), not from the viewer's timezone. A
+run at 11 pm on December 31 belongs to the year the athlete lived it, and a bookmarked URL
+means the same thing on any machine.
+
+Filtering, however, is always a `[t0, t1]` window over UTC `startTs` — that is the only thing
+the fold understands. These two facts cannot both hold for the preset chips, because for an
+athlete who travels there is no single UTC window that exactly reproduces a local-calendar
+year. The chips resolve it explicitly: **a year chip sets `t0` and `t1` to the UTC timestamps
+of the first and last activity whose `startDateLocal` falls in that year.** The window then
+contains exactly that year's activities by the athlete's own calendar, and it is still an
+ordinary UTC window that the fold and the scrubber handles agree on. Buckets and windows stay
+consistent because both are ultimately defined by the same per-activity data.
+
+**Viewport filter.** A "Limit stats to map view" checkbox in the stats card. Off by default,
+so panning the map never silently changes your lifetime numbers. When on, the stats card
+shows a badge and the map draws a hairline inset border to make the constraint visible.
+
+Only the two ground numbers can be clipped to a viewport — a site has a position, but an
+activity's recorded distance does not. So when the filter is on, distinct ground and new ground
+are viewport-limited while **total logged and repeat ratio are hidden entirely**, replaced by
+"n activities intersect this view". Showing a clipped numerator over an unclipped denominator
+would be a meaningless ratio, and hiding it is more honest than inventing an approximation.
+
+**Units.** A mi/km toggle in the stats card footer. Default miles. Persisted in the URL hash.
+
+### 6.5 Stats drawer
+
+"Stats and charts >" in the stats card opens a larger panel over the left half of the
+screen. All charts honor the current filters and update with them. All charts are
+hand-rolled SVG — no chart library.
+
+Chart rules, non-negotiable:
+
+1. **Cumulative coverage over time.** Two lines on one axis: cumulative new ground (blue,
+   `--series-1`) and cumulative total logged distance (orange, `--series-2`), both in the
+   selected unit. Legend present; both lines directly labeled at their right end. Crosshair
+   plus tooltip on hover. Never a second y-axis.
+2. **New ground per period.** Bar chart, one series, `--series-1`, bucketed by month when
+   the window is under three years and by year otherwise. 2 px gaps between bars, 4 px
+   rounded tops, baseline anchored at zero. Per-bar hover tooltip.
+3. **Biggest discoveries.** Table of the top 20 activities by new ground, with a bar-in-cell
+   for the new-ground column: date, name, sport, new ground, distance, percent new. Clicking
+   a row draws that activity on the map and flies to its bounds.
+
+   The `newGroundM` in `activities.json` is a **global, unfiltered** figure: the ground that
+   activity minted across the whole history with no sport filter. That makes it correct only
+   when no sport filter is applied. When one is, the table would silently contradict the
+   headline number, so instead the worker recomputes per-activity new ground under the current
+   sport filter, as a third pass: walk the selected activities in chronological order, and for
+   each touched site whose `firstTsByGroup` minimum over the selected groups equals that
+   activity's `startTs`, add its credit. Cost is the same order as pass 1. The time window is
+   *not* applied here — the table ranks discoveries within the selected window, so it iterates
+   only the windowed activities anyway.
+4. **By sport.** Small table (not a pie): sport group, distinct ground, new ground, total
+   logged, repeat ratio. Colored chip beside each group name using slots 1-3, with a fourth
+   and beyond folded into "Other" in `--text-muted`.
+
+   These figures cannot be sliced out of the main query result — ground covered by both a run
+   and a ride belongs to both rows, so per-group numbers do not sum to the total and any
+   post-filtering of a single result is wrong. Instead the worker runs the **same fold and
+   scan once per selected group**, each restricted to that one group, and returns an array of
+   per-group results alongside the combined one. With at most five groups that is five extra
+   linear passes, tens of milliseconds, and it only runs while the drawer is open.
+
+   The table must therefore state that its rows overlap: a header note reading "ground covered
+   by more than one sport appears in every row that covers it, so the rows do not sum to the
+   total." Without that, the numbers look like an arithmetic error.
+
+Every chart offers a "table" toggle that renders the same numbers as an HTML table. That is
+the standard accessibility relief, and it is required here regardless of contrast — the chart
+palette clears 3:1, but a table is the only form that works with a screen reader.
+
+### 6.6 Application states
+
+| State | Behavior |
+|---|---|
+| No artifacts present, or `formatVersion` mismatch | Full-screen setup card with the four commands from section 2 and a link to `docs/data-pipeline.md`. Not an error. A format mismatch means the binaries cannot be parsed at all, so the app must not attempt to render stale data. |
+| `paramsHash` mismatch | Banner: "Artifacts were built with different algorithm parameters. Run `npm run build`." App still renders — the data is readable, just stale. |
+| Artifacts loading | Skeleton panels and a determinate progress bar driven by fetch progress. Typical payload is 60-90 MB, so this is seconds. |
+| Worker computing | Stat numbers get a subtle pulse. Never blank them; never block the map. |
+| Empty selection | Zeros with the copy "No activities in this selection", not "0.0 mi". |
+| Basemap failed | Flat background, small dismissible notice. Coverage layer still renders. |
+
+### 6.7 "How this is calculated"
+
+A link in the stats card footer opens a modal explaining, in plain language: the two mileage
+numbers and how they differ, the ~20 m matching tolerance, and an honest list of the
+limitations from section 5 — including that excluded activities are missing from "total
+logged", so the numbers here will not match Strava's yearly totals. Users will find edge
+cases; the tool should have already told them about these. Do not hide them.
+
+### 6.8 URL state
+
+The full view state serializes into the URL hash so a view is reloadable and bookmarkable:
+window start and end, selected sport groups, map mode, viewport-filter flag, units, map
+center/zoom/bearing/pitch, and panel collapse states. Read on mount, write on change
+(debounced 250 ms, using `replaceState` so the back button is not spammed).
+
+---
+
+## 7. Performance budgets
+
+Fail the milestone if these are not met on the target machine (an M-series Mac, Chrome, at the
+reference scale of 3,000 activities and roughly 1M sites; the budgets carry headroom to 1.4M).
+
+| Operation | Budget |
+|---|---|
+| `npm run build` full ledger rebuild | < 30 s |
+| Artifact load to first painted map | < 5 s |
+| Filter change (sport, time window, mode) to repainted map | < 100 ms |
+| Time-lapse playback | sustained 30 fps |
+| Map pan/zoom | 60 fps |
+| Resident browser memory | < 400 MB |
+
+---
+
+## 8. Testing
+
+- `packages/ledger` is the only place correctness genuinely matters, and it is a pure
+  function, so it carries the bulk of the tests. `docs/algorithm.md` section 10 specifies a
+  synthetic track generator (10.1) and one test per adversarial case (10.2; the cases
+  themselves are defined in section 9), each with asserted mileage bounds. **These tests are
+  the spec.** If the implementation and the tests disagree, the tests win.
+- `packages/strava` gets tests against recorded JSON fixtures (never live API calls in tests).
+- The query worker gets tests over a small synthetic artifact set, asserting that the fold
+  and scan produce the same numbers as a naive reference implementation.
+- The app gets no component tests in v1. Verify visually with `npm run dev` plus the
+  chrome-devtools MCP.
+- CI runs `lint`, `typecheck`, `test`, and `npm -w app run build`. It does **not** run
+  `build:ledger`, which needs the gitignored `data/` directory; the ledger is already fully
+  exercised by `test`.
+
+---
+
+## 9. Order of work
+
+See `docs/build-plan.md` for the milestone-by-milestone plan with acceptance criteria. The
+short version, and the reason for the order:
+
+1. Scaffold.
+2. Strava auth and sync — because everything downstream needs real data, and the backfill
+   takes hours of wall clock that should start early and run in the background.
+3. **The ledger package and its adversarial test suite** — the heart of the tool. Build it
+   against synthetic tracks before it ever sees real data.
+4. The build script and artifact format.
+5. Map and static coverage rendering.
+6. Query worker and filters.
+7. Modes, legend, tooltips.
+8. Time-lapse playback.
+9. Stats drawer and charts.
+10. Polish: URL state, units, "how this works" modal, the optional offset detector.

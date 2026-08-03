@@ -1,0 +1,36 @@
+{
+  "name": "unique-miles",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "app"
+  ],
+  "scripts": {
+    "auth": "tsx scripts/auth.ts",
+    "sync": "tsx scripts/sync.ts",
+    "build:ledger": "tsx scripts/build-ledger.ts",
+    "stats": "tsx scripts/stats.ts",
+    "dev": "npm -w app run dev",
+    "build": "npm run build:ledger && npm -w app run build",
+    "preview": "npm -w app run preview",
+    "lint": "eslint .",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@types/pako": "^2.0.4",
+    "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "pako": "^2.1.0",
+    "zod": "^3.24.1"
+  }
+}
