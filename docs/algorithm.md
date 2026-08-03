@@ -840,8 +840,13 @@ label distribution, and the ten activities with the most new ground. Sanity chec
 catch broken builds quickly:
 
 - Unique mileage must be well below total mileage for any real history (a typical athlete
-  lands somewhere between 15 and 50 percent).
-- The first activity chronologically must be nearly 100 percent new.
+  lands somewhere between 15 and 50 percent; measured 37.5 percent over a real 1,303-activity,
+  10,595-mile history).
+- At least one activity must credit above 90 percent, proving full credit is reachable.
+  Do **not** assert that the chronologically first activity is nearly 100 percent new: a lap
+  workout or a loop trail legitimately credits a fraction of its distance on its very first
+  outing, and a real history opened with three laps of a 1.4-mile loop at 35 percent.
+- No activity may credit more new ground than it travelled.
 - A repeated commute route must show near-zero new ground after its first occurrence.
 - The label distribution should be dominated by REPEAT for a mature history, with NONE near
   zero. (Samples whose sites the short-run rule removed surface as NONE in Pass II; there is

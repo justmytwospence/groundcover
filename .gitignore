@@ -11,3 +11,4 @@ dist/
 # regenerable data
 data/
 app/public/artifacts/
+.local/

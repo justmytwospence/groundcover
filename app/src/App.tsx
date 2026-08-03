@@ -7,7 +7,7 @@ import { Legend } from './panels/Legend.js';
 import { Scrubber } from './panels/Scrubber.js';
 import { StatsDrawer } from './panels/StatsDrawer.js';
 import { Setup } from './panels/Setup.js';
-import { hydrateFromHash, startHashSync, useStore } from './state/store.js';
+import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
 import type { QueryRequest, TracksMessage, WorkerOut } from './worker/protocol.js';
 
 interface HoverInfo {
@@ -105,8 +105,9 @@ export function App() {
     const m = mapRef.current;
     if (!g || !m) return;
     m.setGeometry(g.src, g.dst, g.n);
-    m.flyToBounds(g.bounds);
-    readyGeom.current = { ...g, bounds: g.bounds };
+    // Only fit the data when the URL did not already carry a view. A bookmarked or shared
+    // link must land where it says it lands (SPEC.md section 6.8).
+    if (!readMapFromHash()) m.flyToBounds(g.bounds);
   }, []);
 
   // ---- querying ------------------------------------------------------------------------

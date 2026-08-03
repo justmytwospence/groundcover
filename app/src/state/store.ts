@@ -147,13 +147,22 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
   });
 }
 
-export function readMapFromHash(): { center: [number, number]; zoom: number } | null {
+/**
+ * Captured ONCE at module load, before the hash writer can touch it. Reading it lazily races
+ * the writer: the writer omits `map=` while the map does not yet exist, so a later read would
+ * see no saved view and the app would refit to the data, discarding a shared link's position.
+ */
+const INITIAL_MAP = (() => {
   const h = new URLSearchParams(location.hash.slice(1));
   const m = h.get('map');
   if (!m) return null;
   const [lng, lat, z] = m.split(',').map(Number);
   if (![lng, lat, z].every(Number.isFinite)) return null;
-  return { center: [lng, lat], zoom: z };
+  return { center: [lng, lat] as [number, number], zoom: z };
+})();
+
+export function readMapFromHash(): { center: [number, number]; zoom: number } | null {
+  return INITIAL_MAP;
 }
 
 export const M_PER_UNIT = { mi: 1609.344, km: 1000 };

@@ -60,10 +60,18 @@ function main(): void {
   // Smoke checks from docs/algorithm.md 10.3.
   console.log('\nsmoke checks');
   const chrono = [...acts].sort((a, b) => a.startTs - b.startTs);
-  const firstPct = chrono.length && chrono[0].distanceM > 0 ? (chrono[0].newGroundM / chrono[0].distanceM) * 100 : 0;
+  const ratio = (a: ActivitySummary) => (a.distanceM > 0 ? a.newGroundM / a.distanceM : 0);
+  const maxPct = Math.max(0, ...acts.map(ratio)) * 100;
+  const firstPct = chrono.length ? ratio(chrono[0]) * 100 : 0;
   const check = (ok: boolean, label: string) => console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`);
+
   check(pct < 90, `unique is well below total (${pct.toFixed(1)}%)`);
-  check(firstPct > 80, `first activity chronologically is mostly new (${firstPct.toFixed(0)}%)`);
+  // Do NOT assert the first activity is ~100% new. A lap workout or a loop trail legitimately
+  // credits a fraction of its distance on its very first outing. What must hold is that full
+  // credit is reachable at all, which a single point-to-point activity demonstrates.
+  check(maxPct > 90, `full credit is reachable (best activity is ${maxPct.toFixed(0)}% new)`);
+  check(firstPct > 0, `the first activity credits something (${firstPct.toFixed(0)}%)`);
+  check(acts.every((a) => a.newGroundM <= a.distanceM * 1.05), 'no activity credits more than it travelled');
   check(m.counts.touches <= m.counts.trackPoints, 'touches <= trackPoints');
   check(m.counts.sites > 0, 'sites exist');
 }
