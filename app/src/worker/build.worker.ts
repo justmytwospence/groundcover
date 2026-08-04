@@ -29,7 +29,17 @@ export type BuildRequest = { type: 'build' };
 
 export type BuildResponse =
   | { type: 'progress'; accepted: number; seen: number }
-  | { type: 'done'; activities: number; sites: number; uniqueMeters: number; totalMeters: number }
+  | {
+      type: 'done';
+      activities: number;
+      sites: number;
+      uniqueMeters: number;
+      totalMeters: number;
+      /** Every activity read from storage, so the report can reconcile against it. */
+      seen: number;
+      /** How many were dropped, by reason. Sums with `activities` to `seen`. */
+      excluded: Record<string, number>;
+    }
   | { type: 'empty' }
   | { type: 'error'; message: string };
 
@@ -86,6 +96,9 @@ async function build(): Promise<void> {
   const out = serialize(builder.finish(), DEFAULT_PARAMS);
   out.manifest.builtAt = new Date().toISOString();
 
+  const excluded: Record<string, number> = {};
+  for (const r of builder.rejected) excluded[r.reason] = (excluded[r.reason] ?? 0) + 1;
+
   // One record per block, matching what ArtifactSource reads. Written before the done message
   // so a caller that reloads the instant it arrives always finds a complete set.
   await put(STORE_ARTIFACTS, { name: 'manifest', data: out.manifest });
@@ -100,6 +113,8 @@ async function build(): Promise<void> {
     sites: out.manifest.counts.sites,
     uniqueMeters: out.manifest.totals.uniqueMeters,
     totalMeters: out.manifest.totals.totalMeters,
+    seen,
+    excluded,
   });
 }
 

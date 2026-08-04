@@ -9,6 +9,7 @@ import { StatsDrawer } from './panels/StatsDrawer.js';
 import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { SitePopup } from './panels/SitePopup.js';
 import { AccountPanel } from './panels/AccountPanel.js';
+import { ImportReport } from './panels/ImportReport.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
@@ -420,6 +421,7 @@ export function App() {
           <StatsCard />
           <Legend />
           <Scrubber />
+          {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
           <AccountPanel
             busy={conn.sync !== null || conn.building}
             connected={conn.state === 'connected'}

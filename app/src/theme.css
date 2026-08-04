@@ -796,3 +796,60 @@ button.chart-toggle {
   line-height: 1.55;
   color: var(--text-secondary);
 }
+
+/* --- import report --- */
+
+.import-report {
+  left: 12px;
+  bottom: 176px;
+  width: 290px;
+}
+
+.import-sum {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.import-sum strong {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-warn {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(220, 70, 50, 0.14);
+  border: 1px solid rgba(220, 70, 50, 0.4);
+  color: #ffb3a3;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.import-reasons {
+  list-style: none;
+  padding: 0;
+  margin: 11px 0 0;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 9px;
+}
+
+.import-reasons li {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.import-count {
+  flex: none;
+  min-width: 30px;
+  text-align: right;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}

@@ -13,6 +13,7 @@ import type { BuildResponse } from '../worker/build.worker.js';
 import { isConnected } from './creds.js';
 import { completeAuthorization } from './oauth.js';
 import { runSync, type SyncProgress } from './sync.js';
+import type { BuildReport } from '../panels/ImportReport.js';
 
 export type ConnState = 'checking' | 'disconnected' | 'connected';
 
@@ -21,6 +22,9 @@ export interface Connection {
   authError: string | null;
   sync: SyncProgress | null;
   building: boolean;
+  /** What the last build left out. Null until one has run in this session. */
+  report: BuildReport | null;
+  dismissReport: () => void;
   startSync: () => void;
   stopSync: () => void;
   dismissSync: () => void;
@@ -50,6 +54,7 @@ export function useConnection(onArtifacts: () => void): Connection {
   const [authError, setAuthError] = useState<string | null>(null);
   const [sync, setSync] = useState<SyncProgress | null>(null);
   const [building, setBuilding] = useState(false);
+  const [report, setReport] = useState<BuildReport | null>(null);
 
   const abort = useRef<AbortController | null>(null);
   const busy = useRef(false);
@@ -69,7 +74,10 @@ export function useConnection(onArtifacts: () => void): Connection {
       while (dirty.current) {
         dirty.current = false;
         const res = await runBuild();
-        if (res.type === 'done') notify.current();
+        if (res.type === 'done') {
+          setReport({ seen: res.seen, included: res.activities, excluded: res.excluded });
+          notify.current();
+        }
       }
     } finally {
       busy.current = false;
@@ -96,6 +104,7 @@ export function useConnection(onArtifacts: () => void): Connection {
     });
   }, [drain]);
 
+  const dismissReport = useCallback(() => setReport(null), []);
   const stopSync = useCallback(() => abort.current?.abort(), []);
   const dismissSync = useCallback(() => setSync(null), []);
 
@@ -137,5 +146,8 @@ export function useConnection(onArtifacts: () => void): Connection {
     };
   }, [startSync]);
 
-  return { state, authError, sync, building, startSync, stopSync, dismissSync, rebuild, disconnect };
+  return {
+    state, authError, sync, building, report,
+    startSync, stopSync, dismissSync, dismissReport, rebuild, disconnect,
+  };
 }

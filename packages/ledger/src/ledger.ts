@@ -6,7 +6,7 @@
 import { angDiff180, angDiff360, groundDist, xToLng, yToLat } from './geo.js';
 import { nearestCandidate, SiteGrid, SiteTable } from './match.js';
 import { SPORT_GROUPS, type Params } from './params.js';
-import { preprocess, type Sample } from './preprocess.js';
+import { excluded, preprocess, type Sample } from './preprocess.js';
 import {
   LABEL_AMBIGUOUS,
   LABEL_NEW,
@@ -357,7 +357,23 @@ export interface LedgerBuilder {
   add(input: LedgerInput): void;
   /** Number of activities accepted so far (excludes those dropped by the exclusion rules). */
   readonly accepted: number;
+  /**
+   * Every activity that was dropped, and why.
+   *
+   * A silent drop is the most dangerous failure this algorithm has. On an unfamiliar history,
+   * hundreds of treadmill runs and manual entries can vanish into a map that looks entirely
+   * plausible while the headline number is far too low, and nothing about the result would
+   * tell anyone. `accepted + rejected.length` must equal the number of activities fed in.
+   */
+  readonly rejected: ReadonlyArray<Rejection>;
   finish(): BuiltLedger;
+}
+
+export interface Rejection {
+  id: number;
+  name: string;
+  /** trainer | manual | virtual | no-gps | stream-mismatch | treadmill-shaped | too-short */
+  reason: string;
 }
 
 /**
@@ -371,12 +387,16 @@ export function createBuilder(
   const sites = new SiteTable();
   const grid = new SiteGrid(params.CELL_MERC);
   const per: PerActivity[] = [];
+  const rejected: Rejection[] = [];
   let seen = 0;
   let lastTs = -Infinity;
 
   return {
     get accepted() {
       return per.length;
+    },
+    get rejected() {
+      return rejected;
     },
     add(a: LedgerInput) {
       if (a.startTs < lastTs) {
@@ -387,8 +407,24 @@ export function createBuilder(
       }
       lastTs = a.startTs;
       seen++;
+
+      // Asking first, rather than reading a reason back out of processActivity, keeps the
+      // algorithm's own path untouched. The cost is that `excluded` runs twice for activities
+      // that pass it -- one extra linear scan over the points of a history, which is not
+      // measurable against the build it precedes.
+      const reason = excluded(a);
+      if (reason !== null) {
+        rejected.push({ id: a.id, name: a.name, reason });
+        onProgress?.(per.length, seen);
+        return;
+      }
+
       const r = processActivity(a, per.length, sites, grid, params);
       if (r) per.push(r);
+      // preprocess also drops an activity whose points collapse to fewer than two after
+      // deduplication and spike filtering -- a recording that never really went anywhere.
+      else rejected.push({ id: a.id, name: a.name, reason: 'too-short' });
+
       onProgress?.(per.length, seen);
     },
     finish() {
