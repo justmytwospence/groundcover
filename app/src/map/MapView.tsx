@@ -23,7 +23,10 @@ export interface MapHandles {
   setActivePath: (path: Array<[number, number]> | null) => void;
   getViewport: () => Viewport | null;
   getMapState: () => { c: [number, number]; z: number } | null;
-  flyToBounds: (b: [number, number, number, number]) => void;
+  flyToBounds: (b: [number, number, number, number], durationMs?: number) => void;
+  /** Fit only when the target is not already comfortably framed, so following a selection
+   *  does not produce constant micro-adjustments while scrubbing or playing back. */
+  fitIfNeeded: (b: [number, number, number, number]) => void;
 }
 
 interface Props {
@@ -148,13 +151,30 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
         const c = map.getCenter();
         return { c: [c.lng, c.lat], z: map.getZoom() };
       },
-      flyToBounds: (bb) => {
+      flyToBounds: (bb, durationMs = 900) => {
         map.fitBounds(
           [
             [bb[0], bb[1]],
             [bb[2], bb[3]],
           ],
-          { padding: 80, duration: 900 },
+          { padding: 80, duration: durationMs },
+        );
+      },
+      fitIfNeeded: (bb) => {
+        const cur = map.getBounds();
+        const contained =
+          bb[0] >= cur.getWest() && bb[2] <= cur.getEast() && bb[1] >= cur.getSouth() && bb[3] <= cur.getNorth();
+        const curW = cur.getEast() - cur.getWest();
+        const curH = cur.getNorth() - cur.getSouth();
+        // Already framed AND filling a reasonable share of the view: leave it alone.
+        const fillsView = (bb[2] - bb[0]) / (curW || 1) > 0.3 && (bb[3] - bb[1]) / (curH || 1) > 0.3;
+        if (contained && fillsView) return;
+        map.fitBounds(
+          [
+            [bb[0], bb[1]],
+            [bb[2], bb[3]],
+          ],
+          { padding: 80, duration: 700 },
         );
       },
     };

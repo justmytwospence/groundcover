@@ -3,7 +3,7 @@ import { fmtDist, useStore } from '../state/store.js';
 import { HowItWorks } from './HowItWorks.js';
 
 export function StatsCard() {
-  const { stats, units, viewportFilter, statsOpen, drawerOpen } = useStore();
+  const { stats, units, viewportFilter, fitToSelection, statsOpen, drawerOpen } = useStore();
   const set = useStore((s) => s.set);
   const [howOpen, setHowOpen] = useState(false);
 
@@ -75,6 +75,15 @@ export function StatsCard() {
                 Total logged is hidden: an activity&apos;s distance has no position to clip.
               </div>
             )}
+
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={fitToSelection}
+                onChange={(e) => set({ fitToSelection: e.target.checked })}
+              />
+              <span>Fit map to selection</span>
+            </label>
 
             <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center' }}>
               <button className="ghost" onClick={() => set({ drawerOpen: !drawerOpen })}>

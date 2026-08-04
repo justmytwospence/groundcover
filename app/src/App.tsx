@@ -7,6 +7,7 @@ import { Legend } from './panels/Legend.js';
 import { Scrubber } from './panels/Scrubber.js';
 import { StatsDrawer } from './panels/StatsDrawer.js';
 import { Setup } from './panels/Setup.js';
+import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
 import type { QueryRequest, TracksMessage, WorkerOut } from './worker/protocol.js';
 
@@ -33,6 +34,9 @@ export function App() {
   const colorVersion = useRef(0);
   const pending = useRef(false);
   const queued = useRef(false);
+  const fitKey = useRef('');
+  const [mapReady, setMapReady] = useState(false);
+  const [tracksLoaded, setTracksLoaded] = useState(false);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [progress, setProgress] = useState(0);
 
@@ -87,6 +91,9 @@ export function App() {
         }
         case 'tracks':
           tracks.current = msg;
+          // A ref assignment cannot wake the effect that wants to draw the path, so flag it
+          // in state: otherwise the first activity you select never gets an overlay.
+          setTracksLoaded(true);
           break;
         case 'error':
           if (msg.kind === 'params-mismatch') set({ paramsWarning: msg.message });
@@ -148,6 +155,65 @@ export function App() {
 
   useEffect(() => startHashSync(() => mapRef.current?.getMapState() ?? null), []);
 
+  // ---- fit the map to the data in the current selection ----------------------------------
+  useEffect(() => {
+    if (store.load !== 'ready' || !store.fitToSelection || !mapReady) return;
+    // Only act when the SELECTION changed. Re-running on every render would fight the user's
+    // own panning, and keying on the map's own state would feed back on itself.
+    const key = `${Math.round(store.t0)}|${Math.round(store.t1)}|${store.groups.join(',')}`;
+    if (fitKey.current === key) return;
+    fitKey.current = key;
+
+    const groupSet = new Set(store.groups);
+    let minLng = Infinity;
+    let minLat = Infinity;
+    let maxLng = -Infinity;
+    let maxLat = -Infinity;
+    for (const a of store.activities) {
+      if (a.startTs < store.t0 || a.startTs > store.t1 || !groupSet.has(a.group)) continue;
+      if (a.bbox[0] < minLng) minLng = a.bbox[0];
+      if (a.bbox[1] < minLat) minLat = a.bbox[1];
+      if (a.bbox[2] > maxLng) maxLng = a.bbox[2];
+      if (a.bbox[3] > maxLat) maxLat = a.bbox[3];
+    }
+    if (!Number.isFinite(minLng)) return;
+    mapRef.current?.fitIfNeeded([minLng, minLat, maxLng, maxLat]);
+  }, [
+    store.load,
+    store.fitToSelection,
+    store.t0,
+    store.t1,
+    store.groups,
+    store.activities,
+    // The map can finish loading after the selection settles; without this the one chance to
+    // fit is burned while mapRef is still null and the selection is never framed.
+    mapReady,
+  ]);
+
+  const searchGo = useCallback(
+    (bounds: Bounds, activityIdx: number | null) => {
+      const s = useStore.getState();
+      const patch: Partial<typeof s> = { activeActivity: activityIdx };
+
+      if (activityIdx !== null) {
+        const a = s.activities[activityIdx];
+        // Flying to an activity outside the current window would land on empty ground: its
+        // sites are filtered out. Widen the window just enough to include it.
+        if (a && (a.startTs < s.t0 || a.startTs > s.t1)) {
+          patch.t0 = Math.min(s.t0, a.startTs);
+          patch.t1 = Math.max(s.t1, a.startTs);
+          // Claim the fit key for the window we are about to set, so "fit to selection" does
+          // not immediately yank the map back out to frame the whole widened range.
+          fitKey.current = `${Math.round(patch.t0)}|${Math.round(patch.t1)}|${s.groups.join(',')}`;
+        }
+      }
+
+      set(patch);
+      mapRef.current?.flyToBounds(bounds);
+    },
+    [set],
+  );
+
   // ---- keyboard ------------------------------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -183,7 +249,7 @@ export function App() {
     const path: Array<[number, number]> = [];
     for (let i = from; i < to; i++) path.push([xToLng(t.px[i] / 100), yToLat(t.py[i] / 100)]);
     mapRef.current?.setActivePath(path);
-  }, [store.activeActivity, tracks.current]);
+  }, [store.activeActivity, tracksLoaded]);
 
   const hoverText = useMemo(() => {
     if (!hover || !siteMeta.current) return null;
@@ -209,6 +275,7 @@ export function App() {
           mapRef.current = h;
           applyGeometry();
           runQuery();
+          setMapReady(true);
         }}
         onViewportChange={() => {
           if (useStore.getState().viewportFilter) runQuery();
@@ -228,6 +295,7 @@ export function App() {
       {store.load === 'ready' && (
         <>
           <FilterPanel />
+          <SearchBox onGo={searchGo} />
           <StatsCard />
           <Legend />
           <Scrubber />

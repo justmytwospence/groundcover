@@ -28,6 +28,8 @@ interface State {
   groups: number[];
   mode: MapMode;
   viewportFilter: boolean;
+  /** Refit the map to the data in the current selection whenever that selection changes. */
+  fitToSelection: boolean;
   units: 'mi' | 'km';
   drawerOpen: boolean;
   filtersOpen: boolean;
@@ -64,6 +66,7 @@ function readHash(): Partial<State> {
   const m = h.get('m');
   if (m === 'heatmap' || m === 'exploration') out.mode = m;
   if (h.get('vp') === '1') out.viewportFilter = true;
+  if (h.get('fit') === '1') out.fitToSelection = true;
   const u = h.get('u');
   if (u === 'mi' || u === 'km') out.units = u;
   if (h.get('d') === '1') out.drawerOpen = true;
@@ -84,6 +87,7 @@ export const useStore = create<State>((set, get) => ({
   groups: [0, 1, 2, 3, 4],
   mode: 'exploration',
   viewportFilter: false,
+  fitToSelection: false,
   units: 'mi',
   drawerOpen: false,
   filtersOpen: true,
@@ -119,6 +123,7 @@ export function hydrateFromHash(minTs: number, maxTs: number): void {
     groups: fromHash.groups ?? s.groups,
     mode: fromHash.mode ?? s.mode,
     viewportFilter: fromHash.viewportFilter ?? s.viewportFilter,
+    fitToSelection: fromHash.fitToSelection ?? s.fitToSelection,
     units: fromHash.units ?? s.units,
     drawerOpen: fromHash.drawerOpen ?? s.drawerOpen,
   });
@@ -135,6 +140,7 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
     h.set('g', s.groups.join(','));
     h.set('m', s.mode);
     if (s.viewportFilter) h.set('vp', '1');
+    if (s.fitToSelection) h.set('fit', '1');
     h.set('u', s.units);
     if (s.drawerOpen) h.set('d', '1');
     const mp = getMapState();
