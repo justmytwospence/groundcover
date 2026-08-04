@@ -31,7 +31,7 @@ export function Scrubber() {
   // The histogram responds to the sport filter but not to the time window: it is the map of
   // the territory being scrubbed through.
   const bars = useMemo(() => {
-    if (!activities.length) return [];
+    if (!activities.length || !Number.isFinite(minTs)) return [];
     const groupSet = new Set(groups);
     const buckets = new Map<number, number>();
     for (const a of activities) {
@@ -40,10 +40,26 @@ export function Scrubber() {
       const key = Date.UTC(d.getUTCFullYear(), d.getUTCMonth()) / 1000;
       buckets.set(key, (buckets.get(key) ?? 0) + a.distanceM);
     }
-    const rows = [...buckets.entries()].sort((a, b) => a[0] - b[0]);
-    const max = Math.max(1, ...rows.map((r) => r[1]));
-    return rows.map(([ts, m]) => ({ ts, h: m / max }));
-  }, [activities, groups]);
+
+    // Emit a CONTIGUOUS month series, including months with no activity. Skipping empty months
+    // and letting flexbox space the rest evenly would put each bar at its index position while
+    // the brush sits at its time position -- the two axes drift apart and the highlight stops
+    // matching the window. Every bar is positioned by time below, on the brush's own scale.
+    const start = new Date(minTs * 1000);
+    const end = new Date((maxTs + DAY) * 1000);
+    const rows: Array<{ ts: number; tsEnd: number; m: number }> = [];
+    for (
+      let y = start.getUTCFullYear(), mo = start.getUTCMonth();
+      Date.UTC(y, mo) <= Date.UTC(end.getUTCFullYear(), end.getUTCMonth());
+      mo === 11 ? ((y += 1), (mo = 0)) : (mo += 1)
+    ) {
+      const ts = Date.UTC(y, mo) / 1000;
+      const tsEnd = Date.UTC(mo === 11 ? y + 1 : y, mo === 11 ? 0 : mo + 1) / 1000;
+      rows.push({ ts, tsEnd, m: buckets.get(ts) ?? 0 });
+    }
+    const max = Math.max(1, ...rows.map((r) => r.m));
+    return rows.map((r) => ({ ts: r.ts, tsEnd: r.tsEnd, h: r.m / max }));
+  }, [activities, groups, minTs, maxTs]);
 
   const years = useMemo(() => yearsOf(activities), [activities]);
 
@@ -166,20 +182,29 @@ export function Scrubber() {
           }
         }}
       >
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', gap: 1 }}>
-          {bars.map((b) => (
-            <div
-              key={b.ts}
-              style={{
-                flex: 1,
-                height: `${Math.max(2, b.h * 100)}%`,
-                background: 'var(--text-muted)',
-                opacity: b.ts >= t0 && b.ts <= t1 ? 0.55 : 0.16,
-                borderRadius: '2px 2px 0 0',
-                minWidth: 1,
-              }}
-            />
-          ))}
+        <div style={{ position: 'absolute', inset: 0 }}>
+          {bars.map((b) => {
+            const left = pct(b.ts);
+            const right = pct(b.tsEnd);
+            // A month counts as selected when it overlaps the window at all, which is what
+            // makes the lit bars line up with the brush edges rather than with a bar boundary.
+            const selected = b.tsEnd > t0 && b.ts < t1;
+            return (
+              <div
+                key={b.ts}
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: `${left}%`,
+                  width: `calc(${Math.max(0, right - left)}% - 1px)`,
+                  height: `${Math.max(2, b.h * 100)}%`,
+                  background: 'var(--text-muted)',
+                  opacity: selected ? 0.55 : 0.16,
+                  borderRadius: '2px 2px 0 0',
+                }}
+              />
+            );
+          })}
         </div>
 
         <div
