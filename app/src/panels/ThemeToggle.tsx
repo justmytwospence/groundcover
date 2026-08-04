@@ -13,7 +13,7 @@ import { applyTheme, saveTheme, watchSystemTheme, type Theme } from '../lib/them
 
 const ICON: Record<Theme, string> = { dark: '☾', light: '☀' };
 
-export function ThemeToggle() {
+export function ThemeToggle({ floating = false }: { floating?: boolean } = {}) {
   const theme = useStore((s) => s.theme);
   const set = useStore((s) => s.set);
 
@@ -27,7 +27,7 @@ export function ThemeToggle() {
 
   return (
     <button
-      className="ghost theme-toggle"
+      className={`ghost theme-toggle${floating ? ' theme-toggle-floating' : ''}`}
       onClick={() => {
         saveTheme(next);
         set({ theme: next });

@@ -549,7 +549,7 @@ in `app/src/theme.css` as custom properties and reference them by role.
 
 ```css
 :root {
-  --map-surface:      #12141a;  /* the dark basemap's background; the chart surface for validation */
+  --map-surface:      #1b1f27;  /* the dark basemap's background; the chart surface for validation */
   --panel-bg:         rgba(20, 23, 30, 0.82);
   --panel-border:     rgba(255, 255, 255, 0.10);
   --text-primary:     #ffffff;
@@ -579,7 +579,12 @@ in `app/src/theme.css` as custom properties and reference them by role.
 
 These are not arbitrary. Both blue ramps were validated as ordinal ramps against the `#12141a`
 map surface: monotone lightness, all adjacent lightness gaps at or above 0.06, single hue (2-3
-degree spread), and the dimmest step clearing 3:1 contrast at 3.41:1. The gold frontier accent
+degree spread), and the dimmest step clearing 3:1 contrast at 3.06:1 against the `#1b1f27` surface. (That
+surface was lightened from `#12141a`, which read as near-black; the ramp was re-validated
+against the new value rather than assumed to still hold. MapLibre's canvas additionally carries
+a `brightness(1.42)` filter in dark mode to lift the basemap's own blacks -- safe because
+deck.gl draws the coverage geometry to a separate canvas above it, so nothing in the validated
+palette is touched by that filter.) The gold frontier accent
 separates from every ramp step by CVD delta-E 24 to 35 (OKLab x100, target 8 or more), so the
 frontier stays unmistakable under protanopia and deuteranopia. The chart categorical trio
 passes all-pairs CVD and normal-vision floors in both light and dark.

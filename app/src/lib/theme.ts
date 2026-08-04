@@ -37,6 +37,18 @@ export const PALETTES: Record<Theme, Palette> = {
   },
 };
 
+/**
+ * Free public elevation tiles from AWS Open Data, in Mapzen's "terrarium" encoding.
+ *
+ * This is a third party, and the honest consequence is that enabling hillshading tells Amazon
+ * roughly where on the map you are looking -- the same disclosure the basemap already makes to
+ * OpenFreeMap, but to one more party. No activity data is involved either way: a tile request
+ * carries a zoom level and two tile indices and nothing else. It is off by default and behind a
+ * checkbox for exactly that reason.
+ */
+export const TERRAIN_TILES =
+  'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+
 /** The basemap that goes with each surface. */
 export const BASEMAP_STYLE: Record<Theme, string> = {
   dark: 'https://tiles.openfreemap.org/styles/dark',

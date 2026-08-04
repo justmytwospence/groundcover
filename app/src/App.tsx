@@ -11,6 +11,7 @@ import { SitePopup } from './panels/SitePopup.js';
 import { AccountPanel } from './panels/AccountPanel.js';
 import { ImportReport } from './panels/ImportReport.js';
 import { SmallScreen } from './panels/SmallScreen.js';
+import { ThemeToggle } from './panels/ThemeToggle.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
@@ -342,20 +343,25 @@ export function App() {
   // read tens of megabytes out of IndexedDB and rebuild the geometry.
   if (conn.state === 'checking' || store.load === 'loading') {
     return (
-      <div className="connect-scroll">
+      <>
+        <ThemeToggle floating />
+        <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto', textAlign: 'center' }}>
           <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>Loading your map</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>
             {progress > 0 ? `${(progress / 1e6).toFixed(1)} MB` : 'Reading it back out of this browser'}
           </div>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
   if (store.load === 'failed' || store.load === 'format-mismatch') {
     return (
-      <div className="connect-scroll">
+      <>
+        <ThemeToggle floating />
+        <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto' }}>
           <h1 className="connect-title" style={{ fontSize: 24 }}>
             Your stored map could not be read
@@ -368,19 +374,23 @@ export function App() {
             Rebuild
           </button>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
   if (showConnect || (store.load !== 'ready' && conn.state === 'disconnected')) {
     return (
-      <ConnectFlow
-        error={conn.authError}
-        onConnected={() => {
-          setShowConnect(false);
-          conn.markConnected();
-        }}
-      />
+      <>
+        <ThemeToggle floating />
+        <ConnectFlow
+          error={conn.authError}
+          onConnected={() => {
+            setShowConnect(false);
+            conn.markConnected();
+          }}
+        />
+      </>
     );
   }
 
@@ -464,25 +474,33 @@ export function App() {
           <StatsCard />
           <Legend />
           <Scrubber />
-          {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
-          <AccountPanel
-            busy={conn.sync !== null || conn.building}
-            connected={conn.state === 'connected'}
-            onSync={conn.startSync}
-            onConnect={() => setShowConnect(true)}
-            onDisconnect={conn.disconnect}
-          />
-          {conn.buildError && (
-            <div className="panel" style={{ left: 12, bottom: 232, width: 290 }}>
-              <h2>Your map could not be rebuilt</h2>
-              <div style={{ color: 'var(--text-secondary)', fontSize: 12.5, lineHeight: 1.5 }}>
-                {conn.buildError}
-              </div>
-              <button className="ghost" onClick={conn.rebuild} style={{ marginTop: 10 }}>
-                Try again
-              </button>
+          {/* One stack rather than three hand-tuned `bottom:` values that drifted into each
+              other and into the scrubber. Bottom-aligned to 150px, matching the legend on the
+              right, and laid out column-reverse so whichever panels are open simply stack. */}
+          <div className="left-rail">
+            <div className="rail-row">
+              <ThemeToggle />
+              <AccountPanel
+                busy={conn.sync !== null || conn.building}
+                connected={conn.state === 'connected'}
+                onSync={conn.startSync}
+                onConnect={() => setShowConnect(true)}
+                onDisconnect={conn.disconnect}
+              />
             </div>
-          )}
+            {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
+            {conn.buildError && (
+              <div className="panel" style={{ width: 290 }}>
+                <h2>Your map could not be rebuilt</h2>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 12.5, lineHeight: 1.5 }}>
+                  {conn.buildError}
+                </div>
+                <button className="ghost" onClick={conn.rebuild} style={{ marginTop: 10 }}>
+                  Try again
+                </button>
+              </div>
+            )}
+          </div>
           {store.drawerOpen && (
             <StatsDrawer
               extras={store.extras}
@@ -523,7 +541,7 @@ export function App() {
                 position: 'absolute',
                 left: Math.min(hover.x + 14, window.innerWidth - 250),
                 top: hover.y + 14,
-                background: 'rgba(12,14,18,0.94)',
+                background: 'var(--tooltip-bg)',
                 border: '1px solid var(--panel-border)',
                 borderRadius: 6,
                 padding: '7px 10px',

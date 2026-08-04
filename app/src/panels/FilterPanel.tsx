@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useStore } from '../state/store.js';
 
 export function FilterPanel() {
-  const { manifest, activities, groups, mode, filtersOpen } = useStore();
+  const { manifest, activities, groups, mode, filtersOpen, hillshade } = useStore();
   const toggleGroup = useStore((s) => s.toggleGroup);
   const set = useStore((s) => s.set);
 
@@ -55,6 +55,19 @@ export function FilterPanel() {
               Heatmap
             </button>
           </div>
+
+          <label className="check" style={{ marginTop: 10 }} title="Shaded relief from AWS Terrain Tiles">
+            <input
+              type="checkbox"
+              checked={hillshade}
+              onChange={() => {
+                const next = !hillshade;
+                localStorage.setItem('um.hillshade', next ? '1' : '0');
+                set({ hillshade: next });
+              }}
+            />
+            <span>Terrain</span>
+          </label>
         </>
       )}
     </div>

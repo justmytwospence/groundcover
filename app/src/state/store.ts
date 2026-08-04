@@ -18,6 +18,7 @@ export interface Stats {
 interface State {
   load: LoadState;
   theme: Theme;
+  hillshade: boolean;
   loadError: string;
   paramsWarning: string;
   manifest: Manifest | null;
@@ -78,6 +79,7 @@ function readHash(): Partial<State> {
 export const useStore = create<State>((set, get) => ({
   load: 'loading',
   theme: initialTheme(),
+  hillshade: localStorage.getItem('um.hillshade') === '1',
   loadError: '',
   paramsWarning: '',
   manifest: null,

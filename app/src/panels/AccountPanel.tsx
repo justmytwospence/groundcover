@@ -46,7 +46,7 @@ export function AccountPanel({
       <button
         className="ghost"
         onClick={() => setOpen(true)}
-        style={{ position: 'absolute', left: 12, bottom: 128, zIndex: 10 }}
+
       >
         Your data
       </button>
@@ -54,7 +54,7 @@ export function AccountPanel({
   }
 
   return (
-    <div className="panel" style={{ left: 12, bottom: 128, width: 250 }}>
+    <div className="panel" style={{ width: 250 }}>
       <h2>
         Your data
         <button onClick={() => setOpen(false)} title="Close">

@@ -16,7 +16,7 @@ import { LineLayer, PathLayer } from '@deck.gl/layers';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { lngToX, latToY } from '@um/ledger';
 import { readMapFromHash, useStore } from '../state/store.js';
-import { BASEMAP_STYLE, type Theme } from '../lib/theme.js';
+import { BASEMAP_STYLE, TERRAIN_TILES, type Theme } from '../lib/theme.js';
 import type { Viewport } from '../worker/protocol.js';
 
 const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
@@ -26,7 +26,7 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
     {
       id: 'bg',
       type: 'background',
-      paint: { 'background-color': theme === 'light' ? '#f4f4f1' : '#12141a' },
+      paint: { 'background-color': theme === 'light' ? '#f4f4f1' : '#1b1f27' },
     },
   ],
 });
@@ -68,6 +68,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const activePath = useRef<Array<[number, number]> | null>(null);
   const mode = useStore((s) => s.mode);
   const theme = useStore((s) => s.theme);
+  const hillshade = useStore((s) => s.hillshade);
 
   const rebuild = () => {
     const deck = deckRef.current;
@@ -281,6 +282,66 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   }, []);
 
   useEffect(rebuild, [mode]);
+
+  /**
+   * Relief shading from a raster-dem source.
+   *
+   * Re-applied on every `styledata`, not just once: setStyle() replaces the entire style
+   * document, so a theme change takes the source and the layer with it. The layer is inserted
+   * beneath the first symbol layer so place names stay legible on top of the terrain rather
+   * than being shaded along with it.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const apply = () => {
+      if (!map.isStyleLoaded()) return;
+      const has = Boolean(map.getLayer('um-hillshade'));
+
+      if (!hillshade) {
+        if (has) map.removeLayer('um-hillshade');
+        if (map.getSource('um-dem')) map.removeSource('um-dem');
+        return;
+      }
+      if (has) return;
+
+      if (!map.getSource('um-dem')) {
+        map.addSource('um-dem', {
+          type: 'raster-dem',
+          tiles: [TERRAIN_TILES],
+          encoding: 'terrarium',
+          tileSize: 256,
+          maxzoom: 13,
+          attribution: 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
+        });
+      }
+      const firstSymbol = map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
+      map.addLayer(
+        {
+          id: 'um-hillshade',
+          type: 'hillshade',
+          source: 'um-dem',
+          paint: {
+            // Strong enough to read as terrain, restrained enough not to compete with the
+            // gold. On the light basemap the highlight does almost nothing -- the surface is
+            // already near-white -- so the relief has to come from the shadow side.
+            'hillshade-exaggeration': theme === 'light' ? 0.6 : 0.45,
+            'hillshade-shadow-color': theme === 'light' ? '#46505f' : '#000000',
+            'hillshade-highlight-color': theme === 'light' ? '#ffffff' : '#9db0cf',
+            'hillshade-accent-color': theme === 'light' ? '#6f7885' : '#0a0d12',
+          },
+        },
+        firstSymbol,
+      );
+    };
+
+    apply();
+    map.on('styledata', apply);
+    return () => {
+      map.off('styledata', apply);
+    };
+  }, [hillshade, theme]);
 
   /**
    * Swap the basemap with the surface.
