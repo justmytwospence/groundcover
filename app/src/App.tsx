@@ -215,9 +215,20 @@ export function App() {
   // ---- fit the map to the data in the current selection ----------------------------------
   useEffect(() => {
     if (store.load !== 'ready' || !store.fitToSelection || !mapReady) return;
+
     // Only act when the SELECTION changed. Re-running on every render would fight the user's
     // own panning, and keying on the map's own state would feed back on itself.
     const key = `${Math.round(store.t0)}|${Math.round(store.t1)}|${store.groups.join(',')}`;
+
+    // Playback advances the window continuously; refitting each step makes the map lurch and
+    // hides the very thing playback exists to show. The key is still recorded while skipping,
+    // so that when playback stops the accumulated movement is not mistaken for a fresh
+    // selection and answered with one last jump.
+    if (store.playing && !store.fitWhilePlaying) {
+      fitKey.current = key;
+      return;
+    }
+
     if (fitKey.current === key) return;
     fitKey.current = key;
 
@@ -238,6 +249,8 @@ export function App() {
   }, [
     store.load,
     store.fitToSelection,
+    store.fitWhilePlaying,
+    store.playing,
     store.t0,
     store.t1,
     store.groups,

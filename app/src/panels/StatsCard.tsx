@@ -3,7 +3,8 @@ import { fmtDist, useStore } from '../state/store.js';
 import { HowItWorks } from './HowItWorks.js';
 
 export function StatsCard() {
-  const { stats, units, viewportFilter, fitToSelection, statsOpen, drawerOpen } = useStore();
+  const { stats, units, viewportFilter, fitToSelection, fitWhilePlaying, statsOpen, drawerOpen } =
+    useStore();
   const set = useStore((s) => s.set);
   const [howOpen, setHowOpen] = useState(false);
 
@@ -84,6 +85,17 @@ export function StatsCard() {
               />
               <span>Fit map to selection</span>
             </label>
+
+            {fitToSelection && (
+              <label className="check" style={{ paddingLeft: 20 }}>
+                <input
+                  type="checkbox"
+                  checked={fitWhilePlaying}
+                  onChange={(e) => set({ fitWhilePlaying: e.target.checked })}
+                />
+                <span>…also while playing</span>
+              </label>
+            )}
 
             <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center' }}>
               <button className="ghost" onClick={() => set({ drawerOpen: !drawerOpen })}>

@@ -33,6 +33,14 @@ interface State {
   viewportFilter: boolean;
   /** Refit the map to the data in the current selection whenever that selection changes. */
   fitToSelection: boolean;
+  /**
+   * Whether "fit to selection" also applies while the time-lapse is playing.
+   *
+   * Off by default. Playback moves the window every frame, so refitting on each one turns a
+   * quiet reveal into the map lurching around, and you lose the very thing playback is for:
+   * watching one place fill in over time.
+   */
+  fitWhilePlaying: boolean;
   units: 'mi' | 'km';
   drawerOpen: boolean;
   filtersOpen: boolean;
@@ -70,6 +78,7 @@ function readHash(): Partial<State> {
   if (m === 'heatmap' || m === 'exploration') out.mode = m;
   if (h.get('vp') === '1') out.viewportFilter = true;
   if (h.get('fit') === '1') out.fitToSelection = true;
+  if (h.get('fitplay') === '1') out.fitWhilePlaying = true;
   const u = h.get('u');
   if (u === 'mi' || u === 'km') out.units = u;
   if (h.get('d') === '1') out.drawerOpen = true;
@@ -93,6 +102,7 @@ export const useStore = create<State>((set, get) => ({
   mode: 'exploration',
   viewportFilter: false,
   fitToSelection: false,
+  fitWhilePlaying: false,
   units: 'mi',
   drawerOpen: false,
   filtersOpen: true,
@@ -134,6 +144,7 @@ export function hydrateFromHash(minTs: number, maxTs: number): void {
     mode: fromHash.mode ?? s.mode,
     viewportFilter: fromHash.viewportFilter ?? s.viewportFilter,
     fitToSelection: fromHash.fitToSelection ?? s.fitToSelection,
+    fitWhilePlaying: fromHash.fitWhilePlaying ?? s.fitWhilePlaying,
     units: fromHash.units ?? s.units,
     drawerOpen: fromHash.drawerOpen ?? s.drawerOpen,
   });
@@ -151,6 +162,7 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
     h.set('m', s.mode);
     if (s.viewportFilter) h.set('vp', '1');
     if (s.fitToSelection) h.set('fit', '1');
+    if (s.fitWhilePlaying) h.set('fitplay', '1');
     h.set('u', s.units);
     if (s.drawerOpen) h.set('d', '1');
     const mp = getMapState();
