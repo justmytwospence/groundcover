@@ -33,7 +33,10 @@ interface NominatimRow {
   boundingbox: [string, string, string, string];
 }
 
+/** Cap activities harder when places are also on offer, so the Places group is never pushed
+ *  below the fold. A city that shares a name with a dozen of your runs is the common case. */
 const MAX_ACTIVITY_HITS = 6;
+const MAX_ACTIVITY_HITS_WITH_PLACES = 4;
 const MAX_PLACE_HITS = 4;
 
 export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number | null) => void }) {
@@ -58,11 +61,11 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
         idx: a.idx,
         bounds: a.bbox,
       });
-      if (out.length >= MAX_ACTIVITY_HITS * 4) break;
+      if (out.length >= MAX_ACTIVITY_HITS * 8) break;
     }
     // Most recent first: a name you half-remember is usually a recent one.
     out.sort((x, y) => (x.sub < y.sub ? 1 : -1));
-    return out.slice(0, MAX_ACTIVITY_HITS);
+    return out;
   }, [q, activities]);
 
   // Nominatim asks for no more than one request a second and no bulk querying; a debounce
@@ -98,7 +101,15 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
     };
   }, [q]);
 
-  const hits: Hit[] = useMemo(() => [...activityHits, ...places], [activityHits, places]);
+  const shownActivities = useMemo(
+    () => activityHits.slice(0, places.length ? MAX_ACTIVITY_HITS_WITH_PLACES : MAX_ACTIVITY_HITS),
+    [activityHits, places.length],
+  );
+  const hits: Hit[] = useMemo(
+    () => [...shownActivities, ...places],
+    [shownActivities, places],
+  );
+  const moreActivities = activityHits.length - shownActivities.length;
 
   useEffect(() => setCursor(0), [q]);
 
@@ -175,40 +186,80 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
       />
 
       {open && hits.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--panel-border)', maxHeight: 300, overflowY: 'auto' }}>
-          {hits.map((h, i) => (
-            <button
-              key={`${h.kind}-${i}-${h.label}`}
-              onClick={() => go(h)}
-              onPointerEnter={() => setCursor(i)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                background: i === cursor ? 'rgba(255,255,255,0.08)' : 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '7px 12px',
-                color: 'var(--text-secondary)',
-                font: 'inherit',
-              }}
-            >
-              <span
-                style={{
-                  display: 'block',
-                  color: h.kind === 'activity' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {h.label}
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {h.kind === 'activity' ? h.sub : 'place'}
-              </span>
-            </button>
-          ))}
+        <div style={{ borderTop: '1px solid var(--panel-border)', maxHeight: 340, overflowY: 'auto' }}>
+          {hits.map((h, i) => {
+            // Group headers make it obvious that both kinds of result are on offer. Without
+            // them a city buried under six same-named runs reads as "no place search".
+            const header =
+              i === 0 && h.kind === 'activity'
+                ? `Activities${moreActivities > 0 ? ` (${activityHits.length} matches)` : ''}`
+                : h.kind === 'place' && (i === 0 || hits[i - 1].kind === 'activity')
+                  ? 'Places'
+                  : null;
+            return (
+              <div key={`${h.kind}-${i}-${h.label}`}>
+                {header && (
+                  <div
+                    style={{
+                      padding: '7px 12px 3px',
+                      fontSize: 10,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      color: 'var(--text-muted)',
+                    }}
+                  >
+                    {header}
+                  </div>
+                )}
+                <button
+                  onClick={() => go(h)}
+                  onPointerEnter={() => setCursor(i)}
+                  style={{
+                    display: 'flex',
+                    gap: 9,
+                    alignItems: 'baseline',
+                    width: '100%',
+                    textAlign: 'left',
+                    background: i === cursor ? 'rgba(255,255,255,0.08)' : 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '6px 12px',
+                    color: 'var(--text-secondary)',
+                    font: 'inherit',
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      flex: '0 0 auto',
+                      width: 8,
+                      height: 8,
+                      marginTop: 1,
+                      borderRadius: h.kind === 'place' ? '50% 50% 50% 0' : 1,
+                      transform: h.kind === 'place' ? 'rotate(-45deg)' : 'none',
+                      background: h.kind === 'place' ? 'var(--text-muted)' : 'var(--frontier)',
+                    }}
+                  />
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        color: 'var(--text-primary)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {h.label}
+                    </span>
+                    {h.kind === 'activity' && (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{h.sub}</span>
+                    )}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
