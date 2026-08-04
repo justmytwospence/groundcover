@@ -41,14 +41,27 @@ export interface BuiltLedger {
   timeRange: { minTs: number; maxTs: number };
 }
 
+/**
+ * What survives one activity, in compact form.
+ *
+ * Deliberately does NOT retain `Sample[]`. Stage 4 only ever needed samples to derive px/py/flag
+ * and to sum credit, so those are computed here and the boxed objects are dropped. Retaining
+ * them cost ~120 bytes per sample -- about 250 MB across a real history -- which is what put a
+ * browser build over budget. This struct is ~9 bytes per sample.
+ */
 interface PerActivity {
   summary: ActivitySummary;
-  samples: Sample[];
-  labels: Uint8Array;
-  siteIds: Int32Array;
+  /** Mercator centimetres, one entry per resampled sample. */
+  px: Int32Array;
+  py: Int32Array;
+  /** Pass II label in bits 0-1, leg-start in bit 2. */
+  flag: Uint8Array;
+  /** Sum of creditM over this activity's samples. */
+  totalM: number;
+  /** Sorted, deduplicated site ids. */
   touches: Uint32Array;
-  /** siteId -> direction bits, parallel to `touches` once emitted in sorted order. */
-  touchDirs: Map<number, number>;
+  /** Direction bits, parallel to `touches`. */
+  touchDirs: Uint8Array;
 }
 
 /**
@@ -257,11 +270,23 @@ function processActivity(
   // ---- Pass II: attribution --------------------------------------------------------------
   // Site references are assigned only now, after all tombstoning, which removes an entire
   // class of dangling-reference bugs at the cost of one extra grid query per sample.
-  const outLabels = new Uint8Array(n);
-  const siteIds = new Int32Array(n).fill(-1);
+  // Compact per-sample output is built in this same pass, so `samples` can be released with
+  // the rest of this function's frame rather than retained until Stage 4.
+  const px = new Int32Array(n);
+  const py = new Int32Array(n);
+  const flag = new Uint8Array(n);
+  let totalM = 0;
+  let prevLeg = -1;
+
   // Direction bits per touched site: bit 0 = travelled along the site's stored bearing,
   // bit 1 = travelled against it. One activity can set both -- that is an out-and-back.
   const touched = new Map<number, number>();
+
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+
   for (let i = 0; i < n; i++) {
     const p = samples[i];
     const c = nearestCandidate(p, params.R_NEW, sites, grid, {
@@ -269,25 +294,26 @@ function processActivity(
       currentAct: actIdx,
       params,
     });
-    if (!c) {
-      outLabels[i] = LABEL_NONE;
-      continue;
-    }
-    siteIds[i] = c.id;
-    const bit = angDiff360(sites.bearing[c.id], p.bearing) <= 90 ? 1 : 2;
-    touched.set(c.id, (touched.get(c.id) ?? 0) | bit);
-    if (sites.mintAct[c.id] === actIdx && sites.mintSample[c.id] === i) outLabels[i] = LABEL_NEW;
-    else if (c.dist <= params.R_REP) outLabels[i] = LABEL_REPEAT;
-    // Ambiguous samples still record a touch: the pass happened, and it must register on the
-    // map and in the distinct-ground number even though it earns no credit.
-    else outLabels[i] = LABEL_AMBIGUOUS;
-  }
 
-  let minLng = Infinity;
-  let minLat = Infinity;
-  let maxLng = -Infinity;
-  let maxLat = -Infinity;
-  for (const p of samples) {
+    let label: number;
+    if (!c) {
+      label = LABEL_NONE;
+    } else {
+      const bit = angDiff360(sites.bearing[c.id], p.bearing) <= 90 ? 1 : 2;
+      touched.set(c.id, (touched.get(c.id) ?? 0) | bit);
+      if (sites.mintAct[c.id] === actIdx && sites.mintSample[c.id] === i) label = LABEL_NEW;
+      else if (c.dist <= params.R_REP) label = LABEL_REPEAT;
+      // Ambiguous samples still record a touch: the pass happened, and it must register on the
+      // map and in the distinct-ground number even though it earns no credit.
+      else label = LABEL_AMBIGUOUS;
+    }
+
+    px[i] = Math.round(p.x * 100);
+    py[i] = Math.round(p.y * 100);
+    flag[i] = label | (p.leg !== prevLeg ? 1 << 2 : 0);
+    prevLeg = p.leg;
+    totalM += p.creditM;
+
     const lng = xToLng(p.x);
     const lat = yToLat(p.y);
     if (lng < minLng) minLng = lng;
@@ -295,6 +321,10 @@ function processActivity(
     if (lat < minLat) minLat = lat;
     if (lat > maxLat) maxLat = lat;
   }
+
+  const touchList = Uint32Array.from([...touched.keys()].sort((x, y) => x - y));
+  const dirList = new Uint8Array(touchList.length);
+  for (let k = 0; k < touchList.length; k++) dirList[k] = touched.get(touchList[k]) ?? 0;
 
   return {
     summary: {
@@ -309,25 +339,73 @@ function processActivity(
       newGroundM: 0,
       bbox: [minLng, minLat, maxLng, maxLat],
     },
-    samples,
-    labels: outLabels,
-    siteIds,
-    touches: Uint32Array.from([...touched.keys()].sort((x, y) => x - y)),
-    touchDirs: touched,
+    px,
+    py,
+    flag,
+    totalM,
+    touches: touchList,
+    touchDirs: dirList,
+  };
+}
+
+export interface LedgerBuilder {
+  /**
+   * Feed one activity. **Must be called in ascending startTs order** -- chronological
+   * attribution is the whole basis of "first visit wins", so out-of-order input silently
+   * produces wrong credit. Throws rather than tolerating it.
+   */
+  add(input: LedgerInput): void;
+  /** Number of activities accepted so far (excludes those dropped by the exclusion rules). */
+  readonly accepted: number;
+  finish(): BuiltLedger;
+}
+
+/**
+ * Incremental entry point. Lets a caller stream activities from disk or an IndexedDB cursor and
+ * free each one's raw arrays immediately, instead of holding the whole history at once.
+ */
+export function createBuilder(
+  params: Params,
+  onProgress?: (accepted: number, seen: number) => void,
+): LedgerBuilder {
+  const sites = new SiteTable();
+  const grid = new SiteGrid(params.CELL_MERC);
+  const per: PerActivity[] = [];
+  let seen = 0;
+  let lastTs = -Infinity;
+
+  return {
+    get accepted() {
+      return per.length;
+    },
+    add(a: LedgerInput) {
+      if (a.startTs < lastTs) {
+        throw new Error(
+          `createBuilder: activities must arrive in ascending startTs order ` +
+            `(got ${a.startTs} after ${lastTs}); sort before feeding, or use runLedger`,
+        );
+      }
+      lastTs = a.startTs;
+      seen++;
+      const r = processActivity(a, per.length, sites, grid, params);
+      if (r) per.push(r);
+      onProgress?.(per.length, seen);
+    },
+    finish() {
+      return compact(per, sites, params);
+    },
   };
 }
 
 export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
   const sorted = [...input].sort((a, b) => a.startTs - b.startTs || a.id - b.id);
-  const sites = new SiteTable();
-  const grid = new SiteGrid(params.CELL_MERC);
-  const per: PerActivity[] = [];
+  const b = createBuilder(params);
+  for (const a of sorted) b.add(a);
+  return b.finish();
+}
 
-  for (const a of sorted) {
-    const r = processActivity(a, per.length, sites, grid, params);
-    if (r) per.push(r);
-  }
-
+function compact(per: PerActivity[], sites: SiteTable, params: Params): BuiltLedger {
+  void params;
   // ---- Stage 4: compaction ---------------------------------------------------------------
   // Every touch list must be remapped through the same table. Skipping this is silent
   // corruption: ids still resolve to real sites, so nothing throws, but everything is wrong.
@@ -369,7 +447,7 @@ export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
       throw new Error(`activity ${i}: ${per[i].touches.length - kept} touches point at tombstoned sites`);
     }
     touchTotal += kept;
-    pointTotal += per[i].samples.length;
+    pointTotal += per[i].px.length;
     actOffsets[i + 1] = touchTotal;
     trackOffsets[i + 1] = pointTotal;
   }
@@ -393,24 +471,20 @@ export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
 
   for (let i = 0; i < per.length; i++) {
     const p = per[i];
-    for (const t of p.touches) {
-      const j = remap[t];
+    for (let k = 0; k < p.touches.length; k++) {
+      const j = remap[p.touches[k]];
       if (j < 0) continue;
-      touchDirs[ti] = p.touchDirs.get(t) ?? 0;
+      touchDirs[ti] = p.touchDirs[k];
       siteIds[ti++] = j;
       const g = p.summary.group;
       if (firstTsByGroup[g][j] === 0xffffffff) firstTsByGroup[g][j] = p.summary.startTs;
     }
-    let prevLeg = -1;
-    for (let k = 0; k < p.samples.length; k++) {
-      const s = p.samples[k];
-      px[pi] = Math.round(s.x * 100);
-      py[pi] = Math.round(s.y * 100);
-      flag[pi] = p.labels[k] | (s.leg !== prevLeg ? 1 << 2 : 0);
-      prevLeg = s.leg;
-      pi++;
-      totalMeters += s.creditM;
-    }
+    // px/py/flag were computed per activity; here they are only concatenated.
+    px.set(p.px, pi);
+    py.set(p.py, pi);
+    flag.set(p.flag, pi);
+    pi += p.px.length;
+    totalMeters += p.totalM;
     minTs = Math.min(minTs, p.summary.startTs);
     maxTs = Math.max(maxTs, p.summary.startTs);
     minLng = Math.min(minLng, p.summary.bbox[0]);

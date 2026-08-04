@@ -14,7 +14,7 @@ export * from './geo.js';
 export * from './params.js';
 export * from './types.js';
 export { excluded } from './preprocess.js';
-export { runLedger } from './ledger.js';
+export { runLedger, createBuilder, type LedgerBuilder } from './ledger.js';
 export { serialize } from './artifacts.js';
 
 /**
