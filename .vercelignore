@@ -1,0 +1,25 @@
+# What must never leave this machine.
+#
+# `vercel deploy` uploads the source tree to build remotely. Vercel falls back to .gitignore
+# when this file is absent, but the owner's raw GPS and live Strava tokens are not something to
+# protect by inference about another tool's default -- they are listed here explicitly, first,
+# and this file is the one that takes precedence.
+#
+# data/ and .local/ are ~110 MB of one person's movements at 8 m resolution. That is their home
+# address, their commute, and their routine.
+data
+.local
+.env
+.env.local
+.strava-token.json
+*.pem
+
+# Nothing here is an input to `npm -w app run build`.
+node_modules
+**/node_modules
+app/dist
+.git
+docs
+scripts
+.claude
+*.test.ts

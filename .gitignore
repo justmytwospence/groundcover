@@ -11,3 +11,4 @@ dist/
 # regenerable data, and the owner's own coverage
 data/
 .local/
+.vercel
