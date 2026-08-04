@@ -37,6 +37,62 @@
   --radius: 10px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  /* Panel chrome that has to invert with the surface. */
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --inset-bg: rgba(255, 255, 255, 0.035);
+  --code-bg: rgba(255, 255, 255, 0.08);
+  --field-bg: rgba(0, 0, 0, 0.3);
+  --track-bg: rgba(255, 255, 255, 0.1);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --attrib-bg: rgba(0, 0, 0, 0.5);
+}
+
+/*
+ * Light is a selected palette, not an inversion.
+ *
+ * On a dark surface brighter means more, so the repeat ramp climbs toward white. On a light
+ * surface that reads backwards, so it descends toward navy instead, and every step was
+ * re-chosen rather than flipped: monotone lightness, adjacent gaps >= 0.06, single hue, and the
+ * lightest step clearing 3:1 against #f4f4f1 at 3.40:1 -- deliberately mirroring the dark
+ * ramp's 3.41:1.
+ *
+ * The frontier gold had to change too. #eda100 sits at 1.9:1 on a light map, a hairline nobody
+ * would see, so it darkens to #c07a00, which clears 3:1 and still separates from every step of
+ * the new ramp by CVD delta-E 24.0 -- inside the 23.8-32.7 band the dark palette achieves.
+ */
+:root[data-theme='light'] {
+  --map-surface: #f4f4f1;
+  --panel-bg: rgba(255, 255, 255, 0.88);
+  --panel-border: rgba(0, 0, 0, 0.13);
+  --text-primary: #16181d;
+  --text-secondary: #454952;
+  --text-muted: #6c707a;
+
+  --frontier: #c07a00;
+  --repeat-1: #4a86cf;
+  --repeat-2: #245f9e;
+  --repeat-3: #0f3557;
+  --ambiguous: #b0b0b7;
+
+  --heat-1: #4a86cf;
+  --heat-2: #3372b5;
+  --heat-3: #245f9e;
+  --heat-4: #164679;
+  --heat-5: #092c52;
+
+  /* The categorical trio passes all-pairs CVD and the normal-vision floor on both surfaces,
+     so it is the one group that genuinely does not need a second set. */
+
+  --hover-bg: rgba(0, 0, 0, 0.06);
+  --inset-bg: rgba(0, 0, 0, 0.035);
+  --code-bg: rgba(0, 0, 0, 0.07);
+  --field-bg: rgba(255, 255, 255, 0.75);
+  --track-bg: rgba(0, 0, 0, 0.12);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  --scrim: rgba(40, 40, 44, 0.45);
+  --attrib-bg: rgba(255, 255, 255, 0.7);
 }
 
 * {
@@ -64,7 +120,7 @@ body,
   border-radius: var(--radius);
   padding: 12px 14px;
   z-index: 10;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow);
 }
 
 .panel h2 {
@@ -112,7 +168,7 @@ label.check .count {
 }
 
 .chip {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--inset-bg);
   border: 1px solid var(--panel-border);
   color: var(--text-secondary);
   border-radius: 999px;
@@ -123,7 +179,7 @@ label.check .count {
 }
 
 .chip:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--hover-bg);
 }
 
 .chip[aria-pressed='true'] {
@@ -160,7 +216,7 @@ hr.rule {
 }
 
 button.ghost {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--inset-bg);
   border: 1px solid var(--panel-border);
   color: var(--text-secondary);
   border-radius: 6px;
@@ -170,12 +226,12 @@ button.ghost {
 }
 
 button.ghost:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--hover-bg);
   color: var(--text-primary);
 }
 
 .maplibregl-ctrl-attrib {
-  background: rgba(0, 0, 0, 0.5) !important;
+  background: var(--attrib-bg) !important;
   font-size: 10px;
 }
 
@@ -443,7 +499,7 @@ button.chart-toggle {
 .chart-table tr.row-click:hover td,
 .chart-table tr.row-click:focus-visible th,
 .chart-table tr.row-click:focus-visible td {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--inset-bg);
 }
 
 .chart-table tr.row-click:focus-visible {
@@ -530,7 +586,7 @@ button.chart-toggle {
   gap: 22px;
   margin: 26px 0;
   padding: 20px 22px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--inset-bg);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
 }
@@ -560,7 +616,7 @@ button.chart-toggle {
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--inset-bg);
   border: 1px solid var(--panel-border);
   border-left: 2px solid var(--frontier);
   border-radius: 6px;
@@ -605,7 +661,7 @@ button.chart-toggle {
 .connect-copy code {
   font-family: var(--mono);
   font-size: 12.5px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--text-primary);
@@ -638,7 +694,7 @@ button.chart-toggle {
 
 .connect-field input {
   width: 100%;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--field-bg);
   border: 1px solid var(--panel-border);
   border-radius: 6px;
   padding: 10px 12px;
@@ -694,7 +750,7 @@ button.chart-toggle {
   border-radius: var(--radius);
   padding: 11px 13px;
   z-index: 30;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow);
 }
 
 .sync-ribbon-done {
@@ -729,7 +785,7 @@ button.chart-toggle {
 
 .sync-bar {
   height: 3px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--track-bg);
   border-radius: 2px;
   margin-top: 8px;
   overflow: hidden;
@@ -900,9 +956,27 @@ button.chart-toggle {
 .connect-paste code {
   font-family: var(--mono);
   font-size: 12.5px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--text-primary);
   word-break: break-all;
+}
+
+.theme-toggle {
+  position: fixed;
+  left: 12px;
+  top: 244px;
+  z-index: 20;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  line-height: 1;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
 }

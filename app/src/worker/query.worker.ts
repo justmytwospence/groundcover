@@ -42,8 +42,20 @@ const hex = (h: string): [number, number, number] => [
   parseInt(h.slice(5, 7), 16),
 ];
 
-const EXPLORATION = [hex('#eda100'), hex('#256abf'), hex('#5598e7'), hex('#9ec5f4'), hex('#9ec5f4')];
-const HEATMAP = [hex('#256abf'), hex('#3987e5'), hex('#6da7ec'), hex('#9ec5f4'), hex('#cde2fb')];
+// Two selected palettes, not one palette and an inversion. On a dark surface brighter means
+// more, so the repeat ramp climbs toward white; on a light surface it must descend toward navy
+// or the encoding reads backwards. Both were validated against their own surface -- see
+// app/src/lib/theme.ts and SPEC.md section 6.2.
+const RAMPS = {
+  dark: {
+    exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'].map(hex),
+    heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'].map(hex),
+  },
+  light: {
+    exploration: ['#c07a00', '#4a86cf', '#245f9e', '#0f3557', '#0f3557'].map(hex),
+    heatmap: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'].map(hex),
+  },
+} as const;
 const EXPLORATION_ALPHA = 255;
 const HEATMAP_ALPHA = 90;
 
@@ -278,8 +290,9 @@ function runFold(req: QueryRequest, groupSet: Set<number>): number {
   return count;
 }
 
-function writeColors(out: Uint8Array, mode: MapMode): void {
-  const ramp = mode === 'heatmap' ? HEATMAP : EXPLORATION;
+function writeColors(out: Uint8Array, mode: MapMode, theme: 'dark' | 'light'): void {
+  const set = RAMPS[theme] ?? RAMPS.dark;
+  const ramp = mode === 'heatmap' ? set.heatmap : set.exploration;
   const alpha = mode === 'heatmap' ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
@@ -393,7 +406,7 @@ function handleQuery(req: QueryRequest): void {
       if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
     }
   }
-  writeColors(colors, req.mode);
+  writeColors(colors, req.mode, req.theme ?? 'dark');
 
   let totalM: number | null = 0;
   let activityCount = activityCountAll;

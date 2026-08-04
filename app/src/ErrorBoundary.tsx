@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
               fontFamily: 'var(--mono)',
               fontSize: 12,
               color: 'var(--text-muted)',
-              background: 'rgba(0,0,0,0.3)',
+              background: 'var(--field-bg)',
               border: '1px solid var(--panel-border)',
               borderRadius: 6,
               padding: '10px 12px',

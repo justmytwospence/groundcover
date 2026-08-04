@@ -16,15 +16,20 @@ import { LineLayer, PathLayer } from '@deck.gl/layers';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { lngToX, latToY } from '@um/ledger';
 import { readMapFromHash, useStore } from '../state/store.js';
+import { BASEMAP_STYLE, type Theme } from '../lib/theme.js';
 import type { Viewport } from '../worker/protocol.js';
 
-const BASEMAP = 'https://tiles.openfreemap.org/styles/dark';
-
-const FALLBACK_STYLE: maplibregl.StyleSpecification = {
+const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
   version: 8,
   sources: {},
-  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#12141a' } }],
-};
+  layers: [
+    {
+      id: 'bg',
+      type: 'background',
+      paint: { 'background-color': theme === 'light' ? '#f4f4f1' : '#12141a' },
+    },
+  ],
+});
 
 /** How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline. */
 const PICK_RADIUS = 10;
@@ -62,6 +67,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const colorVersion = useRef(0);
   const activePath = useRef<Array<[number, number]> | null>(null);
   const mode = useStore((s) => s.mode);
+  const theme = useStore((s) => s.theme);
 
   const rebuild = () => {
     const deck = deckRef.current;
@@ -121,7 +127,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     const saved = readMapFromHash();
     const map = new maplibregl.Map({
       container: el,
-      style: BASEMAP,
+      style: BASEMAP_STYLE[useStore.getState().theme],
       center: saved?.center ?? [-98, 39],
       zoom: saved?.zoom ?? 3,
       attributionControl: { compact: true },
@@ -130,7 +136,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
 
     map.on('error', (e) => {
       // A missing basemap must not take the coverage layer down with it.
-      if (String(e?.error?.message ?? '').includes('style')) map.setStyle(FALLBACK_STYLE);
+      if (String(e?.error?.message ?? '').includes('style'))
+          map.setStyle(fallbackStyle(useStore.getState().theme));
     });
 
     const deck = new Deck({
@@ -274,6 +281,27 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   }, []);
 
   useEffect(rebuild, [mode]);
+
+  /**
+   * Swap the basemap with the surface.
+   *
+   * Safe to do bluntly because deck.gl draws on its own canvas rather than as a layer inside
+   * MapLibre's style -- setStyle() tears down every layer the style owns, and the coverage
+   * geometry is simply not one of them. The applied-theme ref keeps the initial mount from
+   * refetching a style the map was already constructed with.
+   */
+  const appliedTheme = useRef<Theme | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (appliedTheme.current === null) {
+      appliedTheme.current = theme;
+      return;
+    }
+    if (appliedTheme.current === theme) return;
+    appliedTheme.current = theme;
+    map.setStyle(BASEMAP_STYLE[theme]);
+  }, [theme]);
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>

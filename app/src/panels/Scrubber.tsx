@@ -171,7 +171,7 @@ export function Scrubber() {
           className="chip"
           value={windowMode}
           onChange={(e) => set({ windowMode: e.target.value as 'expanding' | 'sliding' })}
-          style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}
+          style={{ background: 'var(--inset-bg)', color: 'var(--text-secondary)' }}
         >
           <option value="expanding">Expanding</option>
           <option value="sliding">Sliding</option>

@@ -9,7 +9,7 @@ export function HowItWorks({ onClose }: { onClose: () => void }) {
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.6)',
+        background: 'var(--scrim)',
         zIndex: 100,
         display: 'grid',
         placeItems: 'center',

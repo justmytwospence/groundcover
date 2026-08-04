@@ -109,7 +109,7 @@ export function SitePopup({ info, x, y, onClose, onPreview }: Props) {
               padding: '6px 12px',
               textDecoration: 'none',
               color: 'var(--text-secondary)',
-              borderBottom: '1px solid rgba(255,255,255,0.04)',
+              borderBottom: '1px solid var(--panel-border)',
             }}
             onFocus={() => onPreview(a.idx)}
           >

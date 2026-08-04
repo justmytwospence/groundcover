@@ -166,7 +166,7 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
                     alignItems: 'baseline',
                     width: '100%',
                     textAlign: 'left',
-                    background: i === cursor ? 'rgba(255,255,255,0.08)' : 'transparent',
+                    background: i === cursor ? 'var(--hover-bg)' : 'transparent',
                     border: 'none',
                     cursor: 'pointer',
                     padding: '6px 12px',

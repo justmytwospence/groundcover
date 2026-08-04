@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import type { ActivitySummary, Manifest } from '@um/ledger';
+import { initialTheme, type Theme } from '../lib/theme.js';
 import type { MapMode, QueryExtras } from '../worker/protocol.js';
 
 export type LoadState = 'loading' | 'ready' | 'no-artifacts' | 'format-mismatch' | 'failed';
@@ -16,6 +17,7 @@ export interface Stats {
 
 interface State {
   load: LoadState;
+  theme: Theme;
   loadError: string;
   paramsWarning: string;
   manifest: Manifest | null;
@@ -75,6 +77,7 @@ function readHash(): Partial<State> {
 
 export const useStore = create<State>((set, get) => ({
   load: 'loading',
+  theme: initialTheme(),
   loadError: '',
   paramsWarning: '',
   manifest: null,

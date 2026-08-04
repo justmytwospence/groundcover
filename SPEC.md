@@ -584,6 +584,41 @@ separates from every ramp step by CVD delta-E 24 to 35 (OKLab x100, target 8 or 
 frontier stays unmistakable under protanopia and deuteranopia. The chart categorical trio
 passes all-pairs CVD and normal-vision floors in both light and dark.
 
+**Light mode is a second selected palette, not an inversion.** On a dark surface brighter means
+more, so the repeat ramp climbs toward white; on a light surface that reads backwards, so it
+descends toward navy instead and every step was re-chosen rather than flipped.
+
+```css
+:root[data-theme='light'] {
+  --map-surface:      #f4f4f1;
+  --frontier:         #c07a00;  /* exactly 1 visit */
+  --repeat-1:         #4a86cf;  /* 2-4 visits   */
+  --repeat-2:         #245f9e;  /* 5-9 visits   */
+  --repeat-3:         #0f3557;  /* 10+ visits   */
+
+  --heat-1:           #4a86cf;  /* 1 visit      */
+  --heat-2:           #3372b5;  /* 2-4 visits   */
+  --heat-3:           #245f9e;  /* 5-9 visits   */
+  --heat-4:           #164679;  /* 10-24 visits */
+  --heat-5:           #092c52;  /* 25+ visits   */
+}
+```
+
+Validated the same way, against `#f4f4f1`: both ramps monotone with adjacent lightness gaps at
+or above 0.06, single hue, and the lightest step clearing 3:1 at 3.40:1 -- deliberately mirroring
+the dark ramp's 3.41:1. The frontier accent had to change: `#eda100` sits at 1.9:1 on a light
+map, a hairline nobody would see. `#c07a00` clears 3:1 and still separates from every step of
+the light ramp by CVD delta-E 24.0, inside the 23.8-32.7 band the dark palette achieves. The
+categorical chart trio is the one group that needs no second set -- it passes all-pairs CVD and
+the normal-vision floor on both surfaces.
+
+The basemap changes with the surface: OpenFreeMap `dark` and `positron` respectively. This is
+safe to swap bluntly because deck.gl draws on its own canvas rather than as a layer inside
+MapLibre's style, so `setStyle()` cannot take the coverage geometry with it.
+
+The theme is **not** carried in the URL hash. The hash is for what you are looking at; a shared
+link should show the recipient their own preferred surface, not impose the sender's.
+
 If any of these values change, re-run the validator rather than eyeballing the result.
 
 Rules that follow from this and must be honored:

@@ -186,6 +186,7 @@ export function App() {
       groups: s.groups,
       viewport: s.viewportFilter ? (mapRef.current?.getViewport() ?? null) : null,
       mode: s.mode,
+      theme: s.theme,
       drawer: s.drawerOpen,
       incremental: s.playing && s.windowMode === 'expanding',
     };
@@ -202,6 +203,9 @@ export function App() {
     store.mode,
     store.viewportFilter,
     store.drawerOpen,
+    // The colour buffer is built in the worker from the active palette, so a surface change is
+    // a re-query, not a CSS repaint. Without this the map keeps the previous theme's ramp.
+    store.theme,
     runQuery,
   ]);
 

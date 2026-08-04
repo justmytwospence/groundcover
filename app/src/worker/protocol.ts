@@ -12,6 +12,8 @@ export interface Viewport {
 }
 
 export interface QueryRequest {
+  /** Which validated palette to paint with. Absent means dark, the original default. */
+  theme?: 'dark' | 'light';
   type: 'query';
   /** Inclusive on both ends, UTC activity start timestamps. */
   t0: number;
