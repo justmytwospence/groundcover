@@ -783,3 +783,16 @@ button.chart-toggle {
   color: var(--text-muted);
   flex: none;
 }
+
+/* The one error every user will hit at least once, so it gets its own treatment rather than
+   being another sentence of body copy they will skim past. */
+.connect-warn {
+  margin: 9px 0 2px;
+  padding: 10px 12px;
+  background: rgba(237, 161, 0, 0.07);
+  border: 1px solid rgba(237, 161, 0, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}

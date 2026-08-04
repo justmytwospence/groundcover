@@ -56,6 +56,9 @@ export function App() {
    *  path through the engine that could leave stale sites alongside new ones. */
   const [reloadKey, setReloadKey] = useState(0);
   const conn = useConnection(useCallback(() => setReloadKey((k) => k + 1), []));
+  /** Lets an already-rendering map reach the connect flow on demand -- the local pipeline
+   *  produces a "ready" map in a browser that has never connected to anything. */
+  const [showConnect, setShowConnect] = useState(false);
 
   // ---- worker lifecycle ----------------------------------------------------------------
   useEffect(() => {
@@ -344,7 +347,7 @@ export function App() {
     );
   }
 
-  if (store.load !== 'ready' && conn.state === 'disconnected') {
+  if (showConnect || (store.load !== 'ready' && conn.state === 'disconnected')) {
     return <ConnectFlow error={conn.authError} />;
   }
 
@@ -419,7 +422,9 @@ export function App() {
           <Scrubber />
           <AccountPanel
             busy={conn.sync !== null || conn.building}
+            connected={conn.state === 'connected'}
             onSync={conn.startSync}
+            onConnect={() => setShowConnect(true)}
             onDisconnect={conn.disconnect}
           />
           {store.drawerOpen && (

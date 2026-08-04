@@ -41,7 +41,7 @@ function Landing({ onStart }: { onStart: () => void }) {
     <div className="connect-scroll">
       <div className="connect-card">
         <h1 className="connect-title">
-          You have run further than you have <em>been</em>.
+          How much ground have you <em>actually</em> covered?
         </h1>
 
         <p className="connect-lede">
@@ -173,12 +173,24 @@ function Credentials({ onBack }: { onBack: () => void }) {
                 Copy
               </button>
             </div>
-            No <code>https://</code>, no trailing slash. Strava rejects the sign-in if this does
-            not match.
+            No <code>https://</code>, no trailing slash, no port. Strava allows exactly one
+            callback domain per application, and it must match wherever you are using this.
+            <div className="connect-warn">
+              If Strava answers with <code>Bad Request</code> and{' '}
+              <code>&quot;field&quot;: &quot;redirect_uri&quot;</code>, this is the field that is
+              wrong &mdash; it is the only cause of that error. Set it to{' '}
+              <code>{domain}</code> and try again.
+            </div>
           </li>
           <li>
             Strava asks you to upload an icon before it will save. Any small image will do; it is
             only shown to you.
+          </li>
+          <li>
+            <strong>Already using this Strava app for something else?</strong> Changing the
+            callback domain will break any other tool that signs in through it, because Strava
+            only stores one. Existing connections keep working &mdash; it is re-authorizing that
+            would fail. Consider whether you would rather run this locally instead.
           </li>
           <li>
             Once saved, the page shows your <strong>Client ID</strong> and, behind a

@@ -17,11 +17,15 @@ function formatBytes(n: number): string {
 
 export function AccountPanel({
   busy,
+  connected,
   onSync,
+  onConnect,
   onDisconnect,
 }: {
   busy: boolean;
+  connected: boolean;
   onSync: () => void;
+  onConnect: () => void;
   onDisconnect: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -60,9 +64,17 @@ export function AccountPanel({
         Stored in this browser only{usage ? `, using about ${usage}` : ''}.
       </p>
 
-      <button className="ghost" onClick={onSync} disabled={busy} style={{ width: '100%' }}>
-        {busy ? 'Working…' : 'Check Strava for new activities'}
-      </button>
+      {/* A map built by the local Node pipeline is "ready" without this browser ever having
+          connected to anything, so the two cases need different offers. */}
+      {connected ? (
+        <button className="ghost" onClick={onSync} disabled={busy} style={{ width: '100%' }}>
+          {busy ? 'Working…' : 'Check Strava for new activities'}
+        </button>
+      ) : (
+        <button className="ghost" onClick={onConnect} style={{ width: '100%' }}>
+          Connect to Strava
+        </button>
+      )}
 
       <div style={{ marginTop: 10 }}>
         {confirming ? (
