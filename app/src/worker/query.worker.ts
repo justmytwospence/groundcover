@@ -10,6 +10,8 @@ import {
   FORMAT_VERSION,
   PARAMS_HASH,
   SPORT_GROUPS,
+  latToY,
+  lngToX,
   xToLng,
   yToLat,
   type ActivitySummary,
@@ -67,6 +69,8 @@ let siteMintTs: Uint32Array;
 let firstTsByGroup: Uint32Array[] = [];
 let actOffsets: Uint32Array;
 let touchSiteIds: Uint32Array;
+let touchDirs: Uint8Array;
+let siteBearing: Uint8Array;
 
 let visitCount: Uint16Array;
 const colorSlots: (Uint8Array | null)[] = [null, null];
@@ -159,6 +163,7 @@ async function init(): Promise<void> {
   firstTsByGroup = sb.firstTsByGroup.map((r) => view(sitesBuf, r) as Uint32Array);
   actOffsets = view(touchesBuf, mf.files.touches.blocks.actOffsets) as Uint32Array;
   touchSiteIds = view(touchesBuf, mf.files.touches.blocks.siteIds) as Uint32Array;
+  touchDirs = view(touchesBuf, mf.files.touches.blocks.dirs) as Uint8Array;
 
   visitCount = new Uint16Array(nSites);
   colorSlots[0] = new Uint8Array(4 * nSites);
@@ -167,6 +172,7 @@ async function init(): Promise<void> {
   // Derive render geometry once: each site becomes a short segment centred on its position
   // and oriented along its bearing. Float32 lng/lat gives ~0.6 m precision, well inside an 8 m mark.
   const bearing = view(sitesBuf, sb.bearing) as Uint8Array;
+  siteBearing = bearing;
   const half = ((mf.params.RESAMPLE_M as number) ?? 8) / 2;
   const src = new Float32Array(2 * nSites);
   const dst = new Float32Array(2 * nSites);
@@ -403,6 +409,125 @@ function handleQuery(req: QueryRequest): void {
   post({ type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, extras }, [buf]);
 }
 
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+/** Encoded bearing (2-degree units over 0..358) to an 8-point compass label. */
+function compass(encoded: number): string {
+  const deg = (encoded * 2) % 360;
+  return COMPASS[Math.round(deg / 45) % 8];
+}
+
+/**
+ * Detail for one site, computed on demand. Sending per-site counts with every query would
+ * mean copying another 1.6 MB per frame; hovering is rare enough to ask for it instead.
+ */
+function handleSiteAt(req: {
+  lng: number;
+  lat: number;
+  radiusM: number;
+  t0: number;
+  t1: number;
+  groups: number[];
+  seq: number;
+}): void {
+  if (!manifest) return;
+
+  // Sites are stored in Mercator centimetres; compare there and convert the radius once.
+  const qx = lngToX(req.lng) * 100;
+  const qy = latToY(req.lat) * 100;
+  const cosLat = Math.cos((req.lat * Math.PI) / 180);
+  const rMerc = (req.radiusM / cosLat) * 100;
+  const r2 = rMerc * rMerc;
+
+  let bestI = -1;
+  let bestD2 = r2;
+  for (let i = 0; i < nSites; i++) {
+    const dx = siteX[i] - qx;
+    if (dx > rMerc || dx < -rMerc) continue;
+    const dy = siteY[i] - qy;
+    if (dy > rMerc || dy < -rMerc) continue;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestI = i;
+    }
+  }
+
+  if (bestI < 0) {
+    post({
+      type: 'siteInfoResult',
+      seq: req.seq,
+      siteIndex: -1,
+      visits: 0,
+      alongCount: 0,
+      againstCount: 0,
+      alongLabel: '',
+      againstLabel: '',
+      firstTs: 0,
+      lastTs: 0,
+      firstActivityName: '',
+      visitsAllTime: 0,
+    });
+    return;
+  }
+
+  const i = bestI;
+  const groupSet = new Set(req.groups);
+  let visits = 0;
+  let visitsAllTime = 0;
+  let alongCount = 0;
+  let againstCount = 0;
+  let firstTs = 0;
+  let lastTs = 0;
+  let firstActivityName = '';
+
+  for (const a of activities) {
+    // Touch lists are sorted, so a binary search finds this site in a few steps.
+    let lo = actOffsets[a.idx];
+    let hi = actOffsets[a.idx + 1] - 1;
+    let at = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const v = touchSiteIds[mid];
+      if (v === i) {
+        at = mid;
+        break;
+      }
+      if (v < i) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    if (at < 0) continue;
+
+    visitsAllTime++;
+    if (a.startTs < req.t0 || a.startTs > req.t1 || !groupSet.has(a.group)) continue;
+
+    visits++;
+    const d = touchDirs[at];
+    if (d & 1) alongCount++;
+    if (d & 2) againstCount++;
+    if (firstTs === 0 || a.startTs < firstTs) {
+      firstTs = a.startTs;
+      firstActivityName = a.name;
+    }
+    if (a.startTs > lastTs) lastTs = a.startTs;
+  }
+
+  const b = siteBearing[i];
+  post({
+    type: 'siteInfoResult',
+    seq: req.seq,
+    siteIndex: i,
+    visits,
+    alongCount,
+    againstCount,
+    alongLabel: compass(b),
+    againstLabel: compass((b + 90) % 180),
+    firstTs,
+    lastTs,
+    firstActivityName,
+    visitsAllTime,
+  });
+}
+
 async function loadTracks(): Promise<void> {
   if (!manifest) return;
   const buf = await fetchBuffer(`/artifacts/${manifest.files.tracks.path}`, () => {});
@@ -435,6 +560,13 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
     case 'release':
       colorSlots[msg.slot] = new Uint8Array(msg.colors);
       slotFree[msg.slot] = true;
+      break;
+    case 'siteAt':
+      try {
+        handleSiteAt(msg);
+      } catch (err) {
+        post({ type: 'error', kind: 'failed', message: String(err) });
+      }
       break;
     case 'loadTracks':
       loadTracks().catch((err) => post({ type: 'error', kind: 'failed', message: String(err) }));

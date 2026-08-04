@@ -57,6 +57,45 @@ export interface QueryResult {
   extras?: QueryExtras;
 }
 
+/**
+ * Find the nearest site to a map position and describe it. The lookup lives here rather than
+ * in deck.gl's picking because deck's picking pass returns nothing in this MapLibre setup --
+ * see the note at the top of MapView. The worker already holds every site position, so a
+ * bounded scan is both simpler and entirely under our control.
+ */
+export interface SiteAtRequest {
+  type: 'siteAt';
+  lng: number;
+  lat: number;
+  /** Search radius in metres, derived from a pixel radius at the current zoom. */
+  radiusM: number;
+  t0: number;
+  t1: number;
+  groups: number[];
+  /** Echoed back so a stale reply can be discarded. */
+  seq: number;
+}
+
+export interface SiteInfoResult {
+  type: 'siteInfoResult';
+  seq: number;
+  /** -1 when nothing was within the search radius. */
+  siteIndex: number;
+  /** Distinct activities covering this ground inside the current filters. */
+  visits: number;
+  /** Split by travel direction. These can sum above `visits`: one out-and-back does both. */
+  alongCount: number;
+  againstCount: number;
+  /** Compass label for each direction, e.g. "NE" and "SW". */
+  alongLabel: string;
+  againstLabel: string;
+  firstTs: number;
+  lastTs: number;
+  firstActivityName: string;
+  /** Visits across the whole history, ignoring the time window and sport filter. */
+  visitsAllTime: number;
+}
+
 export interface ReleaseBuffer {
   type: 'release';
   slot: 0 | 1;
@@ -96,5 +135,16 @@ export interface TracksMessage {
   flag: Uint8Array;
 }
 
-export type WorkerOut = QueryResult | ReadyMessage | ErrorMessage | LoadProgress | TracksMessage;
-export type WorkerIn = QueryRequest | ReleaseBuffer | { type: 'init' } | { type: 'loadTracks' };
+export type WorkerOut =
+  | QueryResult
+  | ReadyMessage
+  | ErrorMessage
+  | LoadProgress
+  | TracksMessage
+  | SiteInfoResult;
+export type WorkerIn =
+  | QueryRequest
+  | ReleaseBuffer
+  | SiteAtRequest
+  | { type: 'init' }
+  | { type: 'loadTracks' };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { xToLng, yToLat } from '@um/ledger';
 import { MapView, type MapHandles } from './map/MapView.js';
 import { FilterPanel } from './panels/FilterPanel.js';
@@ -9,10 +9,12 @@ import { StatsDrawer } from './panels/StatsDrawer.js';
 import { Setup } from './panels/Setup.js';
 import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
-import type { QueryRequest, TracksMessage, WorkerOut } from './worker/protocol.js';
+import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
-interface HoverInfo {
-  siteIndex: number;
+interface HoverAt {
+  lng: number;
+  lat: number;
+  radiusM: number;
   x: number;
   y: number;
 }
@@ -37,7 +39,10 @@ export function App() {
   const fitKey = useRef('');
   const [mapReady, setMapReady] = useState(false);
   const [tracksLoaded, setTracksLoaded] = useState(false);
-  const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [hover, setHover] = useState<HoverAt | null>(null);
+  const hoverSeq = useRef(0);
+  const [siteInfo, setSiteInfo] = useState<SiteInfoResult | null>(null);
+  const hoverTimer = useRef<number | undefined>(undefined);
   const [progress, setProgress] = useState(0);
 
   // ---- worker lifecycle ----------------------------------------------------------------
@@ -89,6 +94,12 @@ export function App() {
           }
           break;
         }
+        case 'siteInfoResult':
+          // A slower earlier lookup must not overwrite a newer one.
+          if (msg.seq !== hoverSeq.current) break;
+          setSiteInfo(msg.siteIndex >= 0 ? msg : null);
+          mapRef.current?.setHovering(msg.siteIndex >= 0);
+          break;
         case 'tracks':
           tracks.current = msg;
           // A ref assignment cannot wake the effect that wants to draw the path, so flag it
@@ -251,17 +262,30 @@ export function App() {
     mapRef.current?.setActivePath(path);
   }, [store.activeActivity, tracksLoaded]);
 
-  const hoverText = useMemo(() => {
-    if (!hover || !siteMeta.current) return null;
-    const ts = siteMeta.current.mintTs[hover.siteIndex];
-    const actIdx = siteMeta.current.mintAct[hover.siteIndex];
-    const act = store.activities[actIdx];
-    if (!ts) return null;
-    return {
-      date: new Date(ts * 1000).toISOString().slice(0, 10),
-      name: act?.name ?? 'unknown activity',
-    };
-  }, [hover, store.activities]);
+  // Ask the worker which site is under the cursor, debounced so sweeping the mouse across the
+  // map does not queue a lookup per pixel.
+  useEffect(() => {
+    window.clearTimeout(hoverTimer.current);
+    if (!hover) {
+      setSiteInfo(null);
+      mapRef.current?.setHovering(false);
+      return;
+    }
+    hoverTimer.current = window.setTimeout(() => {
+      const s = useStore.getState();
+      workerRef.current?.postMessage({
+        type: 'siteAt',
+        lng: hover.lng,
+        lat: hover.lat,
+        radiusM: hover.radiusM,
+        t0: s.t0,
+        t1: s.t1,
+        groups: s.groups,
+        seq: ++hoverSeq.current,
+      });
+    }, 45);
+    return () => window.clearTimeout(hoverTimer.current);
+  }, [hover]);
 
   if (store.load !== 'ready' && store.load !== 'loading') {
     return <Setup state={store.load} message={store.loadError} />;
@@ -280,7 +304,7 @@ export function App() {
         onViewportChange={() => {
           if (useStore.getState().viewportFilter) runQuery();
         }}
-        onHover={(i, x, y) => setHover(i === null ? null : { siteIndex: i, x, y })}
+        onHover={setHover}
       />
 
       {store.load === 'loading' && (
@@ -320,24 +344,62 @@ export function App() {
             </div>
           )}
 
-          {hoverText && hover && (
+          {hover && siteInfo && siteInfo.visits > 0 && (
             <div
               style={{
                 position: 'absolute',
-                left: hover.x + 14,
+                left: Math.min(hover.x + 14, window.innerWidth - 250),
                 top: hover.y + 14,
                 background: 'rgba(12,14,18,0.94)',
                 border: '1px solid var(--panel-border)',
                 borderRadius: 6,
-                padding: '6px 9px',
+                padding: '7px 10px',
                 pointerEvents: 'none',
                 zIndex: 50,
                 fontSize: 11,
-                maxWidth: 240,
+                width: 232,
               }}
             >
-              <div style={{ color: 'var(--frontier)' }}>first covered {hoverText.date}</div>
-              <div style={{ color: 'var(--text-secondary)' }}>{hoverText.name}</div>
+              <div style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }}>
+                {siteInfo.visits === 1 ? '1 pass' : `${siteInfo.visits} passes`}
+                {siteInfo.visitsAllTime > siteInfo.visits && (
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
+                    {'  '}
+                    {siteInfo.visitsAllTime} all time
+                  </span>
+                )}
+              </div>
+
+              {/* Directions can sum above the pass count: one out-and-back travels both ways. */}
+              <div style={{ display: 'flex', gap: 10, margin: '4px 0 5px' }}>
+                {[
+                  { n: siteInfo.alongCount, label: siteInfo.alongLabel },
+                  { n: siteInfo.againstCount, label: siteInfo.againstLabel },
+                ]
+                  .filter((d) => d.n > 0)
+                  .map((d) => (
+                    <span key={d.label} style={{ color: 'var(--text-secondary)' }}>
+                      <span style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                        {d.n}
+                      </span>{' '}
+                      heading {d.label}
+                    </span>
+                  ))}
+              </div>
+
+              <div style={{ color: 'var(--frontier)' }}>
+                first covered {new Date(siteInfo.firstTs * 1000).toISOString().slice(0, 10)}
+              </div>
+              <div
+                style={{
+                  color: 'var(--text-muted)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {siteInfo.firstActivityName}
+              </div>
             </div>
           )}
         </>

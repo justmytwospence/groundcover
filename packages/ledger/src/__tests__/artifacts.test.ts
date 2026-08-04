@@ -84,7 +84,11 @@ describe('artifact serialization', () => {
     const tb = m.files.touches.blocks;
     const actOffsets = viewOf(out.touches, tb.actOffsets) as Uint32Array;
     const siteIds = viewOf(out.touches, tb.siteIds) as Uint32Array;
+    const dirs = viewOf(out.touches, tb.dirs) as Uint8Array;
     expect(actOffsets.length).toBe(built.activities.length + 1);
+    expect(Array.from(dirs)).toEqual(Array.from(built.touches.dirs));
+    // Every touch records at least one traversal direction.
+    for (const d of dirs) expect(d).toBeGreaterThan(0);
     expect(Array.from(siteIds)).toEqual(Array.from(built.touches.siteIds));
 
     for (let a = 0; a < built.activities.length; a++) {
@@ -114,5 +118,57 @@ describe('artifact serialization', () => {
 
   it('carries startDateLocal through to activities.json', () => {
     for (const a of out.activities) expect(typeof a.startDateLocal).toBe('string');
+  });
+});
+
+describe('per-touch traversal direction', () => {
+  it('an out-and-back sets BOTH direction bits on the ground it retraces', () => {
+    const a = outAndBack({ lengthM: 1500, sigmaM: 2, seed: 11, id: 40, startTs: 1700000000 });
+    const built = runLedger([a], DEFAULT_PARAMS);
+    const dirs = built.touches.dirs;
+    let both = 0;
+    let single = 0;
+    for (let i = 0; i < dirs.length; i++) {
+      if (dirs[i] === 3) both++;
+      else if (dirs[i] === 1 || dirs[i] === 2) single++;
+    }
+    // Most of the road is travelled each way by this one activity.
+    expect(both).toBeGreaterThan(single);
+    expect(dirs.length).toBe(built.touches.siteIds.length);
+  });
+
+  it('a one-way pass sets exactly one bit everywhere', () => {
+    const a = straightRoad({ lengthM: 1500, sigmaM: 2, seed: 12, id: 41, startTs: 1700000000 });
+    const built = runLedger([a], DEFAULT_PARAMS);
+    for (const d of built.touches.dirs) expect(d === 1 || d === 2).toBe(true);
+  });
+
+  it('two activities in opposite directions split into the two bits', () => {
+    const out = straightRoad({ lengthM: 1500, sigmaM: 2, seed: 13, id: 42, startTs: 1700000000 });
+    const back = straightRoad({
+      lengthM: 1500,
+      reverse: true,
+      sigmaM: 2,
+      seed: 14,
+      id: 43,
+      startTs: 1700086400,
+    });
+    const built = runLedger([out, back], DEFAULT_PARAMS);
+    const { actOffsets, siteIds, dirs } = built.touches;
+    const dirOf = (act: number) => {
+      const m = new Map<number, number>();
+      for (let k = actOffsets[act]; k < actOffsets[act + 1]; k++) m.set(siteIds[k], dirs[k]);
+      return m;
+    };
+    const first = dirOf(0);
+    const second = dirOf(1);
+    // Judge only the SHARED ground. Sites the return pass mints for itself are "along" by
+    // definition -- a site's bearing is the bearing of whatever minted it.
+    const shared = [...second.keys()].filter((id) => first.has(id));
+    expect(shared.length).toBeGreaterThan(100);
+    for (const id of shared) {
+      expect(first.get(id)).toBe(1);
+      expect(second.get(id)).toBe(2);
+    }
   });
 });

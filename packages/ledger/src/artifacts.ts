@@ -49,7 +49,7 @@ export function serialize(built: BuiltLedger, params: Params = DEFAULT_PARAMS): 
 
   const siteBlocks: Src[] = [xCm, yCm, s.bearing, creditCm, s.mintTs, s.mintAct, ...s.firstTsByGroup];
   const sitesPacked = pack(siteBlocks);
-  const touchesPacked = pack([built.touches.actOffsets, built.touches.siteIds]);
+  const touchesPacked = pack([built.touches.actOffsets, built.touches.siteIds, built.touches.dirs]);
   const tracksPacked = pack([
     built.tracks.trackOffsets,
     built.tracks.px,
@@ -58,7 +58,7 @@ export function serialize(built: BuiltLedger, params: Params = DEFAULT_PARAMS): 
   ]);
 
   const [rx, ry, rb, rc, rt, ra, ...rg] = sitesPacked.refs;
-  const [rAct, rSite] = touchesPacked.refs;
+  const [rAct, rSite, rDirs] = touchesPacked.refs;
   const [rTo, rPx, rPy, rFl] = tracksPacked.refs;
 
   const manifest: Manifest = {
@@ -93,7 +93,7 @@ export function serialize(built: BuiltLedger, params: Params = DEFAULT_PARAMS): 
       touches: {
         path: 'touches.bin',
         byteLength: touchesPacked.buffer.byteLength,
-        blocks: { actOffsets: rAct, siteIds: rSite },
+        blocks: { actOffsets: rAct, siteIds: rSite, dirs: rDirs },
       },
       tracks: {
         path: 'tracks.bin',

@@ -185,9 +185,13 @@ function sampleArc(
   return out;
 }
 
-/** A straight road, optionally offset sideways so two calls make parallel roads. */
+/**
+ * A straight road, optionally offset sideways so two calls make parallel roads. `reverse`
+ * traverses the SAME road end to start -- note that a bearing 180 degrees apart would instead
+ * lay down a different road heading the other way from the origin.
+ */
 export function straightRoad(
-  o: CommonSynthOptions & { lengthM: number; bearingDeg?: number; offsetM?: number },
+  o: CommonSynthOptions & { lengthM: number; bearingDeg?: number; offsetM?: number; reverse?: boolean },
 ): LedgerInput {
   const step = o.stepM ?? 4;
   const b = ((o.bearingDeg ?? 0) * Math.PI) / 180;
@@ -196,7 +200,8 @@ export function straightRoad(
   const off = o.offsetM ?? 0;
   const ox = -uy * off;
   const oy = ux * off;
-  return fromLocalPath(sampleLine(ox, oy, ox + ux * o.lengthM, oy + uy * o.lengthM, step), o);
+  const pts = sampleLine(ox, oy, ox + ux * o.lengthM, oy + uy * o.lengthM, step);
+  return fromLocalPath(o.reverse ? [...pts].reverse() : pts, o);
 }
 
 /** The same road traversed out and back in one activity. */

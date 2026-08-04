@@ -1,8 +1,17 @@
-/** MapLibre basemap with a deck.gl overlay. See SPEC.md section 6.3. */
+/**
+ * MapLibre basemap with a deck.gl layer on its own canvas. See SPEC.md section 6.3.
+ *
+ * Deliberately NOT deck's MapboxOverlay. In overlaid mode the overlay's canvas never adopted
+ * the container's size -- it stayed at the 300x150 HTML default, so every picking coordinate
+ * landed outside the viewport and hover never fired. In interleaved mode deck renders inside
+ * MapLibre's WebGL context and picking finds nothing at all, even for a plain 4px line layer.
+ * A standalone Deck with a canvas we size ourselves, a view state synced from the map, and
+ * picking we call ourselves is fully under our control and simply works.
+ */
 
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
-import { MapboxOverlay } from '@deck.gl/mapbox';
+import { Deck } from '@deck.gl/core';
 import { LineLayer, PathLayer } from '@deck.gl/layers';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { lngToX, latToY } from '@um/ledger';
@@ -17,6 +26,9 @@ const FALLBACK_STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#12141a' } }],
 };
 
+/** How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline. */
+const PICK_RADIUS = 10;
+
 export interface MapHandles {
   setColors: (colors: Uint8Array, version: number) => void;
   setGeometry: (src: Float32Array, dst: Float32Array, n: number) => void;
@@ -24,33 +36,36 @@ export interface MapHandles {
   getViewport: () => Viewport | null;
   getMapState: () => { c: [number, number]; z: number } | null;
   flyToBounds: (b: [number, number, number, number], durationMs?: number) => void;
-  /** Fit only when the target is not already comfortably framed, so following a selection
-   *  does not produce constant micro-adjustments while scrubbing or playing back. */
   fitIfNeeded: (b: [number, number, number, number]) => void;
+  /** Reflect whether something is under the cursor. */
+  setHovering: (on: boolean) => void;
 }
 
 interface Props {
   onReady: (h: MapHandles) => void;
   onViewportChange: () => void;
-  onHover: (siteIndex: number | null, x: number, y: number) => void;
+  /** Cursor moved over the map: geographic position, a pixel-derived search radius in
+   *  metres, and the screen point for tooltip placement. null when the cursor left. */
+  onHover: (at: { lng: number; lat: number; radiusM: number; x: number; y: number } | null) => void;
 }
 
 export function MapView({ onReady, onViewportChange, onHover }: Props) {
   const container = useRef<HTMLDivElement>(null);
+  const deckCanvas = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const overlayRef = useRef<MapboxOverlay | null>(null);
+  const deckRef = useRef<Deck | null>(null);
   const geom = useRef<{ src: Float32Array; dst: Float32Array; n: number } | null>(null);
   const colorsRef = useRef<Uint8Array | null>(null);
   const colorVersion = useRef(0);
   const activePath = useRef<Array<[number, number]> | null>(null);
   const mode = useStore((s) => s.mode);
 
-  // Rebuild layers from whatever is currently in the refs.
   const rebuild = () => {
-    const overlay = overlayRef.current;
+    const deck = deckRef.current;
     const g = geom.current;
-    if (!overlay || !g || !colorsRef.current) return;
+    if (!deck || !g || !colorsRef.current) return;
     const heat = useStore.getState().mode === 'heatmap';
+
     const coverage = new LineLayer({
       id: 'coverage',
       data: {
@@ -76,7 +91,6 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
           } as const)
         : {},
       updateTriggers: { getColor: colorVersion.current },
-      onHover: (info) => onHover(info.index >= 0 ? info.index : null, info.x, info.y),
     });
 
     const layers: unknown[] = [coverage];
@@ -95,14 +109,15 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
         }),
       );
     }
-    overlay.setProps({ layers: layers as never });
+    deck.setProps({ layers: layers as never });
   };
 
   useEffect(() => {
-    if (!container.current || mapRef.current) return;
+    if (!container.current || !deckCanvas.current || mapRef.current) return;
+    const el = container.current;
     const saved = readMapFromHash();
     const map = new maplibregl.Map({
-      container: container.current,
+      container: el,
       style: BASEMAP,
       center: saved?.center ?? [-98, 39],
       zoom: saved?.zoom ?? 3,
@@ -115,12 +130,59 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
       if (String(e?.error?.message ?? '').includes('style')) map.setStyle(FALLBACK_STYLE);
     });
 
-    const overlay = new MapboxOverlay({ interleaved: false, layers: [] });
-    overlayRef.current = overlay;
-    map.addControl(overlay as unknown as maplibregl.IControl);
+    const deck = new Deck({
+      canvas: deckCanvas.current,
+      // MapLibre owns all interaction; deck only mirrors its camera.
+      controller: false,
+      viewState: {
+        longitude: map.getCenter().lng,
+        latitude: map.getCenter().lat,
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      },
+      layers: [],
+    });
+    deckRef.current = deck;
+
+    const sync = () => {
+      const c = map.getCenter();
+      deck.setProps({
+        viewState: {
+          longitude: c.lng,
+          latitude: c.lat,
+          zoom: map.getZoom(),
+          bearing: map.getBearing(),
+          pitch: map.getPitch(),
+        },
+      });
+    };
+    // 'move' fires continuously through animated flights, so the two stay locked together.
+    map.on('move', sync);
+    map.on('moveend', onViewportChange);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
-    map.on('moveend', onViewportChange);
+    // The nearest-site lookup runs in the worker, not through deck's picking: deck's picking
+    // pass returns nothing in this setup (see the note at the top of this file), and the
+    // worker already holds every site position.
+    const onMove = (e: PointerEvent) => {
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const ll = map.unproject([x, y]);
+      // Ground metres per CSS pixel at this latitude and zoom.
+      const mPerPx =
+        (156543.03392 * Math.cos((ll.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
+      onHover({ lng: ll.lng, lat: ll.lat, radiusM: mPerPx * PICK_RADIUS, x, y });
+    };
+    const onLeave = () => onHover(null);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerleave', onLeave);
+
+    if (import.meta.env.DEV) {
+      // Dev-only handle so a console session can project coordinates and drive picking.
+      (window as unknown as Record<string, unknown>).__um = { map, deck };
+    }
 
     const handles: MapHandles = {
       setColors: (colors, version) => {
@@ -160,6 +222,9 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
           { padding: 80, duration: durationMs },
         );
       },
+      setHovering: (on) => {
+        map.getCanvas().style.cursor = on ? 'pointer' : '';
+      },
       fitIfNeeded: (bb) => {
         const cur = map.getBounds();
         const contained =
@@ -184,6 +249,10 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
     const t = window.setTimeout(() => onReady(handles), 4000);
     return () => {
       window.clearTimeout(t);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerleave', onLeave);
+      deck.finalize();
+      deckRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -191,5 +260,13 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
 
   useEffect(rebuild, [mode]);
 
-  return <div ref={container} style={{ position: 'absolute', inset: 0 }} />;
+  return (
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <div ref={container} style={{ position: 'absolute', inset: 0 }} />
+      <canvas
+        ref={deckCanvas}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+      />
+    </div>
+  );
 }

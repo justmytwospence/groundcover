@@ -75,7 +75,7 @@ export interface Manifest {
     touches: {
       path: string;
       byteLength: number;
-      blocks: { actOffsets: BlockRef; siteIds: BlockRef };
+      blocks: { actOffsets: BlockRef; siteIds: BlockRef; dirs: BlockRef };
     };
     tracks: {
       path: string;
@@ -103,4 +103,9 @@ export const LABEL_NONE = 3;
 /** Bit 2 of `flag`: this sample starts a new leg, so renderers must break the path here. */
 export const FLAG_LEG_START = 1 << 2;
 
-export const FORMAT_VERSION = 1;
+/** 2 added per-touch traversal direction bits to touches.bin. */
+export const FORMAT_VERSION = 2;
+
+/** touches.bin `dirs` bits: which way the activity travelled past the site. */
+export const DIR_ALONG = 1;
+export const DIR_AGAINST = 2;

@@ -33,7 +33,7 @@ export interface BuiltLedger {
     mintAct: Uint32Array;
     firstTsByGroup: Uint32Array[];
   };
-  touches: { actOffsets: Uint32Array; siteIds: Uint32Array };
+  touches: { actOffsets: Uint32Array; siteIds: Uint32Array; dirs: Uint8Array };
   tracks: { trackOffsets: Uint32Array; px: Int32Array; py: Int32Array; flag: Uint8Array };
   activities: ActivitySummary[];
   totals: { uniqueMeters: number; totalMeters: number };
@@ -47,6 +47,8 @@ interface PerActivity {
   labels: Uint8Array;
   siteIds: Int32Array;
   touches: Uint32Array;
+  /** siteId -> direction bits, parallel to `touches` once emitted in sorted order. */
+  touchDirs: Map<number, number>;
 }
 
 /**
@@ -257,7 +259,9 @@ function processActivity(
   // class of dangling-reference bugs at the cost of one extra grid query per sample.
   const outLabels = new Uint8Array(n);
   const siteIds = new Int32Array(n).fill(-1);
-  const touched = new Set<number>();
+  // Direction bits per touched site: bit 0 = travelled along the site's stored bearing,
+  // bit 1 = travelled against it. One activity can set both -- that is an out-and-back.
+  const touched = new Map<number, number>();
   for (let i = 0; i < n; i++) {
     const p = samples[i];
     const c = nearestCandidate(p, params.R_NEW, sites, grid, {
@@ -270,7 +274,8 @@ function processActivity(
       continue;
     }
     siteIds[i] = c.id;
-    touched.add(c.id);
+    const bit = angDiff360(sites.bearing[c.id], p.bearing) <= 90 ? 1 : 2;
+    touched.set(c.id, (touched.get(c.id) ?? 0) | bit);
     if (sites.mintAct[c.id] === actIdx && sites.mintSample[c.id] === i) outLabels[i] = LABEL_NEW;
     else if (c.dist <= params.R_REP) outLabels[i] = LABEL_REPEAT;
     // Ambiguous samples still record a touch: the pass happened, and it must register on the
@@ -307,7 +312,8 @@ function processActivity(
     samples,
     labels: outLabels,
     siteIds,
-    touches: Uint32Array.from([...touched].sort((x, y) => x - y)),
+    touches: Uint32Array.from([...touched.keys()].sort((x, y) => x - y)),
+    touchDirs: touched,
   };
 }
 
@@ -369,6 +375,7 @@ export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
   }
 
   const siteIds = new Uint32Array(touchTotal);
+  const touchDirs = new Uint8Array(touchTotal);
   const px = new Int32Array(pointTotal);
   const py = new Int32Array(pointTotal);
   const flag = new Uint8Array(pointTotal);
@@ -389,6 +396,7 @@ export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
     for (const t of p.touches) {
       const j = remap[t];
       if (j < 0) continue;
+      touchDirs[ti] = p.touchDirs.get(t) ?? 0;
       siteIds[ti++] = j;
       const g = p.summary.group;
       if (firstTsByGroup[g][j] === 0xffffffff) firstTsByGroup[g][j] = p.summary.startTs;
@@ -420,7 +428,7 @@ export function runLedger(input: LedgerInput[], params: Params): BuiltLedger {
 
   return {
     sites: { n: live, x: sx, y: sy, bearing: sb, creditM: sc, mintTs: st, mintAct: sa, firstTsByGroup },
-    touches: { actOffsets, siteIds },
+    touches: { actOffsets, siteIds, dirs: touchDirs },
     tracks: { trackOffsets, px, py, flag },
     activities,
     totals: { uniqueMeters, totalMeters },

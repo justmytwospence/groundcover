@@ -380,9 +380,17 @@ Compressed-sparse-row mapping of activity to the site ids it covered.
 |---|---|---|
 | `actOffsets` | `Uint32` | `nActivities + 1` |
 | `siteIds` | `Uint32` | `nTouches` |
+| `dirs` | `Uint8` | `nTouches` |
 
 Activity `a`'s sites are `siteIds[actOffsets[a] .. actOffsets[a+1])`, **sorted ascending and
-deduplicated**. This is the array the query fold walks; sorted order gives it sequential
+deduplicated**.
+
+`dirs` is parallel to `siteIds` and records which way the activity travelled past that site:
+bit 0 means along the site's stored bearing, bit 1 means against it. **Both bits can be set on
+one touch** -- that is an out-and-back retracing its own ground within a single activity, which
+is exactly why direction is recorded per touch rather than per activity. A site's bearing is
+whatever minted it, so the first pass over new ground is "along" by definition; the labels
+shown in the UI are compass points derived from that bearing, not "forward" and "reverse". This is the array the query fold walks; sorted order gives it sequential
 memory access.
 
 ### 5.4 `tracks.bin` (lazily loaded)
