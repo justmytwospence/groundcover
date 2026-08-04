@@ -23,6 +23,7 @@ import type {
   MapMode,
   QueryExtras,
   QueryRequest,
+  SiteVisit,
   Viewport,
   WorkerIn,
   WorkerOut,
@@ -428,6 +429,7 @@ function handleSiteAt(req: {
   t1: number;
   groups: number[];
   seq: number;
+  detail?: boolean;
 }): void {
   if (!manifest) return;
 
@@ -479,6 +481,7 @@ function handleSiteAt(req: {
   let firstTs = 0;
   let lastTs = 0;
   let firstActivityName = '';
+  const detail: SiteVisit[] = [];
 
   for (const a of activities) {
     // Touch lists are sorted, so a binary search finds this site in a few steps.
@@ -504,6 +507,17 @@ function handleSiteAt(req: {
     const d = touchDirs[at];
     if (d & 1) alongCount++;
     if (d & 2) againstCount++;
+    if (req.detail) {
+      detail.push({
+        idx: a.idx,
+        stravaId: a.stravaId,
+        name: a.name,
+        startTs: a.startTs,
+        startDateLocal: a.startDateLocal,
+        sportType: a.sportType,
+        dir: d,
+      });
+    }
     if (firstTs === 0 || a.startTs < firstTs) {
       firstTs = a.startTs;
       firstActivityName = a.name;
@@ -525,6 +539,7 @@ function handleSiteAt(req: {
     lastTs,
     firstActivityName,
     visitsAllTime,
+    activities: req.detail ? detail.sort((x, y) => y.startTs - x.startTs) : undefined,
   });
 }
 

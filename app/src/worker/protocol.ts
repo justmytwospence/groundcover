@@ -74,6 +74,20 @@ export interface SiteAtRequest {
   groups: number[];
   /** Echoed back so a stale reply can be discarded. */
   seq: number;
+  /** Also return the full list of activities that covered this ground. Click-only: a hover
+   *  needs the counts, not a hundred rows. */
+  detail?: boolean;
+}
+
+export interface SiteVisit {
+  idx: number;
+  stravaId: number;
+  name: string;
+  startTs: number;
+  startDateLocal: string;
+  sportType: string;
+  /** Direction bits: 1 along the site's bearing, 2 against, 3 both. */
+  dir: number;
 }
 
 export interface SiteInfoResult {
@@ -94,6 +108,8 @@ export interface SiteInfoResult {
   firstActivityName: string;
   /** Visits across the whole history, ignoring the time window and sport filter. */
   visitsAllTime: number;
+  /** Present only when the request asked for detail. Newest first. */
+  activities?: SiteVisit[];
 }
 
 export interface ReleaseBuffer {

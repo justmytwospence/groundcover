@@ -47,9 +47,12 @@ interface Props {
   /** Cursor moved over the map: geographic position, a pixel-derived search radius in
    *  metres, and the screen point for tooltip placement. null when the cursor left. */
   onHover: (at: { lng: number; lat: number; radiusM: number; x: number; y: number } | null) => void;
+  /** Map clicked. Uses MapLibre's click event, which already distinguishes a click from the
+   *  end of a drag. */
+  onPick: (at: { lng: number; lat: number; radiusM: number; x: number; y: number }) => void;
 }
 
-export function MapView({ onReady, onViewportChange, onHover }: Props) {
+export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const deckCanvas = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -178,6 +181,18 @@ export function MapView({ onReady, onViewportChange, onHover }: Props) {
     const onLeave = () => onHover(null);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerleave', onLeave);
+
+    map.on('click', (e) => {
+      const mPerPx =
+        (156543.03392 * Math.cos((e.lngLat.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
+      onPick({
+        lng: e.lngLat.lng,
+        lat: e.lngLat.lat,
+        radiusM: mPerPx * PICK_RADIUS,
+        x: e.point.x,
+        y: e.point.y,
+      });
+    });
 
     if (import.meta.env.DEV) {
       // Dev-only handle so a console session can project coordinates and drive picking.

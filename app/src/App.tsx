@@ -8,6 +8,7 @@ import { Scrubber } from './panels/Scrubber.js';
 import { StatsDrawer } from './panels/StatsDrawer.js';
 import { Setup } from './panels/Setup.js';
 import { SearchBox, type Bounds } from './panels/SearchBox.js';
+import { SitePopup } from './panels/SitePopup.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
 import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
@@ -42,6 +43,9 @@ export function App() {
   const [hover, setHover] = useState<HoverAt | null>(null);
   const hoverSeq = useRef(0);
   const [siteInfo, setSiteInfo] = useState<SiteInfoResult | null>(null);
+  const [pinned, setPinned] = useState<{ info: SiteInfoResult; x: number; y: number } | null>(null);
+  const pickSeq = useRef(0);
+  const pickPoint = useRef<{ x: number; y: number } | null>(null);
   const hoverTimer = useRef<number | undefined>(undefined);
   const [progress, setProgress] = useState(0);
 
@@ -95,7 +99,17 @@ export function App() {
           break;
         }
         case 'siteInfoResult':
-          // A slower earlier lookup must not overwrite a newer one.
+          if (msg.activities) {
+            // A click asked for the full list.
+            if (msg.seq !== pickSeq.current) break;
+            setPinned(
+              msg.siteIndex >= 0 && pickPoint.current
+                ? { info: msg, x: pickPoint.current.x, y: pickPoint.current.y }
+                : null,
+            );
+            break;
+          }
+          // A slower earlier hover lookup must not overwrite a newer one.
           if (msg.seq !== hoverSeq.current) break;
           setSiteInfo(msg.siteIndex >= 0 ? msg : null);
           mapRef.current?.setHovering(msg.siteIndex >= 0);
@@ -305,6 +319,25 @@ export function App() {
           if (useStore.getState().viewportFilter) runQuery();
         }}
         onHover={setHover}
+        onPick={(at) => {
+          const s = useStore.getState();
+          pickPoint.current = { x: at.x, y: at.y };
+          // Sequence numbers are shared with hover lookups, so a reply can be matched to
+          // whichever request it answers.
+          hoverSeq.current += 1;
+          pickSeq.current = hoverSeq.current;
+          workerRef.current?.postMessage({
+            type: 'siteAt',
+            lng: at.lng,
+            lat: at.lat,
+            radiusM: at.radiusM,
+            t0: s.t0,
+            t1: s.t1,
+            groups: s.groups,
+            seq: pickSeq.current,
+            detail: true,
+          });
+        }}
       />
 
       {store.load === 'loading' && (
@@ -344,7 +377,20 @@ export function App() {
             </div>
           )}
 
-          {hover && siteInfo && siteInfo.visits > 0 && (
+          {pinned && (
+            <SitePopup
+              info={pinned.info}
+              x={pinned.x}
+              y={pinned.y}
+              onClose={() => {
+                setPinned(null);
+                set({ activeActivity: null });
+              }}
+              onPreview={(idx) => set({ activeActivity: idx })}
+            />
+          )}
+
+          {!pinned && hover && siteInfo && siteInfo.visits > 0 && (
             <div
               style={{
                 position: 'absolute',
