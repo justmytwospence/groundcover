@@ -6,6 +6,13 @@
  * operations do not justify a dependency, and the promise plumbing is contained in one file.
  */
 
+/**
+ * Frozen at the original project name on purpose. This string is the key the browser files a
+ * person's entire downloaded history under; changing it would not migrate that data, it would
+ * orphan it -- the old database would linger, invisible and undeletable through the UI, while
+ * the app started again from nothing. A product rename is not worth that, and nobody ever sees
+ * this value.
+ */
 export const DB_NAME = 'unique-miles';
 export const DB_VERSION = 1;
 
