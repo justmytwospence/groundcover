@@ -1042,3 +1042,15 @@ button.chart-toggle {
   font-size: 14px;
   line-height: 1;
 }
+
+/* The modifier-drag zoom rectangle. Hidden until a drag starts; never takes pointer events,
+   or it would swallow the very pointermove that is sizing it. */
+.zoom-box {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--frontier);
+  background: color-mix(in srgb, var(--frontier) 14%, transparent);
+  border-radius: 3px;
+}

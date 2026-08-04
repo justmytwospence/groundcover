@@ -60,6 +60,9 @@ interface Props {
 export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const deckCanvas = useRef<HTMLCanvasElement>(null);
+  const boxEl = useRef<HTMLDivElement>(null);
+  /** True while a modifier-drag zoom box is being dragged. */
+  const boxing = useRef(false);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const deckRef = useRef<Deck | null>(null);
   const geom = useRef<{ src: Float32Array; dst: Float32Array; n: number } | null>(null);
@@ -177,6 +180,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     // pass returns nothing in this setup (see the note at the top of this file), and the
     // worker already holds every site position.
     const onMove = (e: PointerEvent) => {
+      if (boxing.current) return;
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -190,7 +194,87 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerleave', onLeave);
 
+    // ---- modifier-drag zoom box ----------------------------------------------------------
+    //
+    // MapLibre already box-zooms on shift+drag, but shift is not a modifier anyone guesses, and
+    // it draws nothing while you drag. This adds Cmd (or Ctrl) with a visible rectangle, and
+    // leaves the built-in shift behaviour alone.
+    let boxStart: { x: number; y: number } | null = null;
+    // Disabling dragPan for the box means MapLibre never sees a drag, so it reports the
+    // gesture as an ordinary click and pins a site popup on whatever the box happened to
+    // start over. The click arrives right after pointerup, so one flag is enough.
+    let swallowNextClick = false;
+
+    const paintBox = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+      const box = boxEl.current;
+      if (!box) return;
+      box.style.display = 'block';
+      box.style.left = `${Math.min(a.x, b.x)}px`;
+      box.style.top = `${Math.min(a.y, b.y)}px`;
+      box.style.width = `${Math.abs(a.x - b.x)}px`;
+      box.style.height = `${Math.abs(a.y - b.y)}px`;
+    };
+
+    const endBox = () => {
+      boxStart = null;
+      boxing.current = false;
+      if (boxEl.current) boxEl.current.style.display = 'none';
+      map.dragPan.enable();
+    };
+
+    const onBoxDown = (e: PointerEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.button !== 0) return;
+      const rect = el.getBoundingClientRect();
+      boxStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      boxing.current = true;
+      // Otherwise the map pans underneath the rectangle being drawn.
+      map.dragPan.disable();
+      onHover(null);
+      e.preventDefault();
+    };
+
+    const onBoxMove = (e: PointerEvent) => {
+      if (!boxStart) return;
+      const rect = el.getBoundingClientRect();
+      paintBox(boxStart, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+    };
+
+    const onBoxUp = (e: PointerEvent) => {
+      if (!boxStart) return;
+      const rect = el.getBoundingClientRect();
+      const end = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const start = boxStart;
+      const dragged = Math.abs(start.x - end.x) > 8 && Math.abs(start.y - end.y) > 8;
+      endBox();
+      // A stray modifier-click is not a zoom request. Anything smaller than this would also
+      // zoom to a degenerate box and leave the user somewhere they did not ask to be.
+      if (!dragged) return;
+      swallowNextClick = true;
+      map.fitBounds([map.unproject([start.x, start.y]), map.unproject([end.x, end.y])], {
+        padding: 24,
+        duration: 400,
+      });
+    };
+
+    const onBoxKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && boxStart) endBox();
+    };
+    // Ctrl+drag is a right-click gesture on macOS; without this the menu interrupts the drag.
+    const onCtxMenu = (e: Event) => {
+      if (boxing.current) e.preventDefault();
+    };
+
+    el.addEventListener('pointerdown', onBoxDown);
+    window.addEventListener('pointermove', onBoxMove);
+    window.addEventListener('pointerup', onBoxUp);
+    window.addEventListener('keydown', onBoxKey);
+    el.addEventListener('contextmenu', onCtxMenu);
+
     map.on('click', (e) => {
+      if (swallowNextClick) {
+        swallowNextClick = false;
+        return;
+      }
       const mPerPx =
         (156543.03392 * Math.cos((e.lngLat.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
       onPick({
@@ -274,6 +358,11 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       window.clearTimeout(t);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerleave', onLeave);
+      el.removeEventListener('pointerdown', onBoxDown);
+      window.removeEventListener('pointermove', onBoxMove);
+      window.removeEventListener('pointerup', onBoxUp);
+      window.removeEventListener('keydown', onBoxKey);
+      el.removeEventListener('contextmenu', onCtxMenu);
       deck.finalize();
       deckRef.current = null;
       map.remove();
@@ -371,6 +460,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
         ref={deckCanvas}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
       />
+      <div ref={boxEl} className="zoom-box" />
     </div>
   );
 }
