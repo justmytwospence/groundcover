@@ -20,6 +20,31 @@ requires them.
 
 ---
 
+## 0. The privacy invariant
+
+**One person's coverage at 8 m resolution is their home address, their commute, and their
+routine.** Everything below is subordinate to that.
+
+1. No GPS, no artifact, and no token belonging to any person may ever be committed to this
+   repository or included in a deployed build. This is enforced structurally, not by
+   discipline: built artifacts live in `.local/artifacts/`, which is outside every directory
+   `vite build` copies from, and `.vercelignore` names `data/` and `.local/` explicitly so a
+   deploy cannot upload them even if `.gitignore` changes.
+2. In the public product there is no server, no account and no database. A visitor's history
+   moves from Strava to their own browser and stops there. The `Content-Security-Policy` in
+   `vercel.json` names Strava and the basemap in `connect-src` and nothing else, so this is
+   enforced by the browser rather than promised in a footer.
+3. Token and secret values are never logged, printed, embedded in an error message, or put
+   in a URL. Error paths carry HTTP status codes only.
+4. The dev-only HTTP artifact source in `app/src/worker/artifactSource.ts` is gated on
+   `import.meta.env.DEV` so a production bundle contains no code path that fetches anyone's
+   coverage over a network.
+
+If a future change makes any of these harder to guarantee, that is a reason to reject the
+change, not to weaken the invariant.
+
+---
+
 ## 1. Product definition
 
 ### 1.1 The core idea
@@ -62,11 +87,11 @@ These were decided during spec review. Do not relitigate them during implementat
 | Decision | Choice |
 |---|---|
 | Uniqueness method | Geometry-only (SiteLedger v2). No OpenStreetMap, no map matching, no routing engine. |
-| Data ingestion | Strava API only. OAuth once, then resumable rate-limited backfill, then incremental sync. |
-| Strava app | A **new, dedicated** Strava API application. Must not reuse the credentials the another tool project uses (see 4.2). |
-| Audience | Single athlete (the repo owner). No accounts, no multi-user state, no sharing. |
-| Runtime | Local-first: everything runs on the owner's Mac. The web app is a pure static build that reads precomputed artifacts over HTTP, so it can be dropped on a static host later without restructuring. |
-| Heavy compute | Runs in a Node build script, not the browser. The browser only runs query-time folds. |
+| Data ingestion | Strava API. OAuth once, then resumable rate-limited backfill, then incremental sync. A bulk-export ZIP is an optional accelerator for the backfill, never a prerequisite. |
+| Strava app | Local pipeline: reuses the owner's existing registration. Public product: **each visitor registers their own** (see 4.2). |
+| Audience | Two deployments of one codebase. The local pipeline serves one athlete; the public build serves anyone, with no accounts and no shared state — every visitor is independently self-contained. |
+| Runtime | The public build computes everything in the visitor's browser. The local pipeline still precomputes in Node, which remains the fastest personal workflow. |
+| Heavy compute | Runs wherever the data is: a Node script locally, a Web Worker in the public build. `packages/ledger` is the same pure code in both. |
 | Layout | Full-bleed map with floating translucent control panels. |
 | Default map mode | Exploration (first-visit vs repeat coloring). Classic frequency heatmap is one toggle away. |
 | v1 feature set | Heatmap + both mileage numbers + time/sport/viewport filters + time-lapse playback + exploration/heatmap modes + stats dashboard. |
@@ -79,7 +104,8 @@ what is already noted.
 - OpenStreetMap integration of any kind: no untraveled-roads overlay, no "percent of city
   complete", no per-street names. (Deferred: see 3.5 for the one hook that keeps it possible.)
 - Explorer-tile gamification (zoom-14 tiles, max square, max cluster, badges).
-- Multi-user support, login, sharing, public links.
+- Login, accounts, server-side state, or sharing another person's map. The public build is
+  multi-*visitor* but never multi-user: there is nothing shared to log in to.
 - Strava webhooks. Sync is a manual command.
 - Route planning, segment analysis, training metrics, heart rate, power.
 - Mobile-first design. It must not be broken on a tablet, but the target is a desktop browser.
@@ -219,10 +245,17 @@ geometry needed is a dozen lines and turf's per-call overhead is the wrong shape
 million-point loops), h3-js (benchmarked at ~0.4M ops/s with a known regression to ~36k;
 an integer Mercator grid is orders of magnitude faster and is what the algorithm specifies).
 
-### 3.3 Why the heavy compute runs in Node
+### 3.3 Where the heavy compute runs
 
-The full-history ledger build is a single-threaded pass over a few million points that
-takes seconds. Running it in a Node script instead of a browser worker means:
+Both, from identical code. `packages/ledger` is a pure function of `(activities, params)`,
+so the only question is who calls it.
+
+**Public build:** `app/src/worker/build.worker.ts` streams activities out of IndexedDB into
+`createBuilder()` and writes the artifacts back. It must stream rather than gather: holding a
+real history as `LedgerInput[]` costs ~536 MB before the algorithm starts, which survives
+desktop Chrome and kills Safari. Feeding one activity at a time keeps the peak near 190 MB.
+
+**Local pipeline:** `scripts/build-ledger.ts` in Node. Running it there means:
 
 - The algorithm package is a pure function of `(sorted activities, params)`, unit-testable
   with `vitest` and golden files, with no worker lifecycle, no `postMessage` marshalling,
@@ -231,13 +264,13 @@ takes seconds. Running it in a Node script instead of a browser worker means:
   is the part that genuinely has to be interactive.
 - The static-deploy-later path works unchanged: artifacts are just files.
 
-The cost is that adding one activity requires re-running `npm run build`, which takes
+The cost is that adding one activity requires re-running `npm run build:ledger`, which takes
 seconds. That is an acceptable trade for a tool refreshed a few times a week.
 
 `packages/ledger` must therefore contain **no Node APIs** (`fs`, `path`, `Buffer`). It takes
 plain data in and returns `ArrayBuffer`s and plain objects out. `scripts/build-ledger.ts`
-owns all I/O. This keeps the door open to running it in a browser worker later without a
-rewrite.
+owns all I/O for the local path and `build.worker.ts` owns it for the public one. That
+constraint is what let the browser build exist at all, without a rewrite.
 
 ### 3.4 The query engine
 
@@ -338,6 +371,15 @@ a another tool sync will make both see 429s — both retry, so this degrades rat
 
 Never print, log, or commit token values. `.env.local` and `.strava-token.json` are
 gitignored from the first commit.
+
+**The public build shares nothing.** Every visitor registers their own Strava application and
+holds their own credentials in their own browser. This is not a convenience: Strava counts
+rate limits *per application*, so one shared registration would run dry after a handful of
+people and the ceiling would be permanent. Per-visitor credentials remove the ceiling
+entirely, and mean this project holds no Strava relationship and nobody else's secrets. The
+cost, accepted deliberately, is that the API route requires a paid Strava subscription, since
+June 2026 a condition of holding API credentials at all. The landing page says so before the
+connect button rather than at step seven.
 
 ### 4.3 Sync
 
