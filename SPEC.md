@@ -622,11 +622,17 @@ themselves.
 - Transport controls: play/pause, speed (0.5x, 1x, 2x, 4x), and a window-mode select of
   Expanding (t0 pinned at history start, t1 advances) or Sliding (fixed-width window moves).
 
-At 1x, playback advances history time at **one month per real second**, pro-rated per frame by
-elapsed wall-clock milliseconds so that playback speed is independent of frame rate. The other
-presets scale that rate. In Expanding mode the rate applies to `t1`; in Sliding mode it applies
-to the fixed-width window's position. Reaching the end of history pauses playback with the
+At 1x, playback replays the **whole history in about 45 seconds**, whatever it spans, pro-rated
+per frame by elapsed wall-clock milliseconds so the rate is independent of frame rate. A
+normalised rate rather than a fixed one keeps playback watchable whether the history covers one
+year or ten. The other presets scale it. In Expanding mode the rate applies to `t1`; in Sliding
+mode it applies to the fixed-width window's position. Reaching the end pauses playback with the
 window at its final position.
+
+**Pressing play while the window is already at the end rewinds and replays from the start.**
+The default view is all-time, so without this the first frame runs past the end, playback stops
+instantly, and the button appears to do nothing at all. Per-frame elapsed time is also clamped
+(0.25 s) so returning to a backgrounded tab resumes rather than jumping.
 
 Calendar bucketing — the monthly histogram and the per-period bar chart — derives from each
 activity's `startDateLocal` (Strava's `start_date_local`), not from the viewer's timezone. A

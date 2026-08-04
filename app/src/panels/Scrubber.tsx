@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
 
 const DAY = 86400;
+/** Seconds of real time to replay the whole history at 1x. */
+const PLAYBACK_SECONDS = 45;
 
 /** Local-calendar year boundaries derived from the athlete's own start_date_local. */
 function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map<number, [number, number]> {
@@ -101,29 +103,42 @@ export function Scrubber() {
     };
   }, [posToTs, setWindow, t0, t1, span, minTs, maxTs]);
 
-  // Playback: one month of history per real second at 1x, pro-rated by elapsed wall clock so
-  // the rate is independent of frame rate.
+  // Playback. The rate is normalised so a full history plays in about PLAYBACK_SECONDS at 1x
+  // whether it spans one year or ten, pro-rated by elapsed wall clock so it is independent of
+  // frame rate.
   useEffect(() => {
     if (!playing) return;
+    const end = maxTs + DAY;
+    const span = Math.max(DAY, end - minTs);
+
+    // Pressing play with the window already at the end -- which is the default, all-time view
+    // -- would run past the end on the very first frame and stop instantly, looking exactly
+    // like the button does nothing. Rewind and replay from the start instead.
+    const s0 = useStore.getState();
+    if (s0.t1 >= end - 1) {
+      if (s0.windowMode === 'expanding') set({ t0: minTs, t1: minTs });
+      else set({ t0: minTs, t1: Math.min(end, minTs + (s0.t1 - s0.t0)) });
+    }
+
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
-      const dt = (now - last) / 1000;
+      const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
-      const advance = dt * speed * 30 * DAY;
+      const advance = dt * speed * (span / PLAYBACK_SECONDS);
       const s = useStore.getState();
       if (s.windowMode === 'expanding') {
         const next = s.t1 + advance;
-        if (next >= s.maxTs + DAY) {
-          set({ t1: s.maxTs + DAY, playing: false });
+        if (next >= end) {
+          set({ t1: end, playing: false });
           return;
         }
         set({ t1: next });
       } else {
         const w = s.t1 - s.t0;
         const next = s.t0 + advance;
-        if (next + w >= s.maxTs + DAY) {
-          set({ t0: s.maxTs + DAY - w, t1: s.maxTs + DAY, playing: false });
+        if (next + w >= end) {
+          set({ t0: end - w, t1: end, playing: false });
           return;
         }
         set({ t0: next, t1: next + w });
@@ -132,7 +147,7 @@ export function Scrubber() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, set]);
+  }, [playing, speed, set, minTs, maxTs]);
 
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 

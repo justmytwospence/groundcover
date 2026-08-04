@@ -111,6 +111,11 @@ export const useStore = create<State>((set, get) => ({
   },
 }));
 
+if (import.meta.env.DEV) {
+  // Dev-only handle for console debugging.
+  (window as unknown as Record<string, unknown>).__umStore = useStore;
+}
+
 /** Apply URL state once the time range is known. */
 export function hydrateFromHash(minTs: number, maxTs: number): void {
   const s = useStore.getState();
