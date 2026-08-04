@@ -29,10 +29,13 @@ export function SyncRibbon({
   progress,
   onStop,
   onDismiss,
+  onReconnect,
 }: {
   progress: SyncProgress;
   onStop: () => void;
   onDismiss: () => void;
+  /** Provided only when the run ended because Strava rejected the credential. */
+  onReconnect?: () => void;
 }) {
   const [showWarnings, setShowWarnings] = useState(false);
   const p = progress;
@@ -90,9 +93,14 @@ export function SyncRibbon({
       </div>
 
       <div className="sync-ribbon-actions">
+        {onReconnect && (
+          <button className="ghost" onClick={onReconnect}>
+            Reconnect
+          </button>
+        )}
         {p.warnings.length > 0 && (
           <button className="ghost" onClick={() => setShowWarnings((v) => !v)}>
-            {p.warnings.length} skipped
+            {p.warnings.length} left out
           </button>
         )}
         {finished ? (
@@ -108,9 +116,12 @@ export function SyncRibbon({
 
       {showWarnings && (
         <div className="sync-warnings">
+          {/* Do not assert a cause here. This list mixes activities that genuinely have no GPS
+              with ones whose download failed, and telling someone their failed downloads were
+              treadmill runs is worse than saying nothing. Each row carries its own reason. */}
           <p>
-            These were left out. Almost always this means the activity had no GPS &mdash; a
-            treadmill run, a manual entry, or an indoor ride.
+            These are not on your map. The reason is given for each; anything that failed will be
+            retried next time.
           </p>
           <ul>
             {p.warnings.slice(0, 200).map((w) => (

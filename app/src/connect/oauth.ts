@@ -57,13 +57,26 @@ function cleanUrl(): void {
   window.history.replaceState(null, '', url.pathname + url.search + url.hash);
 }
 
+let inFlight: Promise<CallbackResult> | null = null;
+
 /**
  * Completes the flow if this page load is a redirect back from Strava.
  *
  * Returns `none` for an ordinary visit, which is the common case -- callers should treat it as
  * "nothing happened", not as a failure.
+ *
+ * Memoised at module scope because StrictMode mounts every effect twice in development. The
+ * exchange itself was always safe: the state is consumed and the URL cleaned synchronously
+ * before the first await, so a second call finds no code and returns `none`. The damage was to
+ * the *result* -- the real answer, including every error message, belonged to the first
+ * invocation, whose caller had already been told to discard it. A denied consent, a state
+ * mismatch, a missing scope and a rejected secret all produced total silence in `npm run dev`.
  */
-export async function completeAuthorization(): Promise<CallbackResult> {
+export function completeAuthorization(): Promise<CallbackResult> {
+  return (inFlight ??= runCompleteAuthorization());
+}
+
+async function runCompleteAuthorization(): Promise<CallbackResult> {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
   const error = params.get('error');

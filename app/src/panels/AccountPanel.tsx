@@ -84,16 +84,24 @@ export function AccountPanel({
       )}
 
       {/* A map built by the local Node pipeline is "ready" without this browser ever having
-          connected to anything, so the two cases need different offers. */}
-      {connected ? (
+          connected to anything, so the primary offer differs. */}
+      {connected && (
         <button className="ghost" onClick={onSync} disabled={busy} style={{ width: '100%' }}>
           {busy ? 'Working…' : 'Check Strava for new activities'}
         </button>
-      ) : (
-        <button className="ghost" onClick={onConnect} style={{ width: '100%' }}>
-          Connect to Strava
-        </button>
       )}
+
+      {/* Offered even when already "connected". Holding a credential row is not the same as
+          holding a working one: revoking the app on Strava, or rotating its secret, leaves this
+          browser convinced it is connected while every request fails. Without a way back to the
+          authorization flow the only remaining control was the one that erases everything. */}
+      <button
+        className="ghost"
+        onClick={onConnect}
+        style={{ width: '100%', marginTop: connected ? 7 : 0 }}
+      >
+        {connected ? 'Reconnect to Strava' : 'Connect to Strava'}
+      </button>
 
       <div style={{ marginTop: 10 }}>
         {confirming ? (

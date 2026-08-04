@@ -64,6 +64,19 @@ export function App() {
 
   // ---- worker lifecycle ----------------------------------------------------------------
   useEffect(() => {
+    // Everything derived from the previous worker's build is now wrong, and none of it clears
+    // itself. `pending` is only ever cleared by a `result` message, so terminating a worker
+    // mid-query latched it true forever -- after which every query returned early and the map
+    // silently stopped responding to the scrubber, the filters and the mode toggle, while
+    // tooltips kept working so it still looked alive. `tracks` is indexed by activity position,
+    // and positions shift whenever a backfill inserts older activities, so a stale copy draws
+    // one activity's route under another's name.
+    pending.current = false;
+    queued.current = false;
+    stableColors.current = null;
+    tracks.current = null;
+    setTracksLoaded(false);
+
     const w = new Worker(new URL('./worker/query.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = w;
 
@@ -85,6 +98,7 @@ export function App() {
             bounds: [b.minLng, b.minLat, b.maxLng, b.maxLat],
           };
           applyGeometry();
+          runQuery();
           break;
         }
         case 'result': {
@@ -318,16 +332,21 @@ export function App() {
   // is true both for a returning visitor and for local development against files built by the
   // Node pipeline, where nothing was ever "connected" in this browser at all. Only once we know
   // there is nothing to draw does the question of connecting arise.
+  // No `progress > 0` guard. That byte counter is fed only by the dev-only HTTP artifact
+  // source, which production drops entirely, so the card it gated was unreachable for every
+  // real visitor -- who instead got an unbranded dark rectangle for however long it took to
+  // read tens of megabytes out of IndexedDB and rebuild the geometry.
   if (conn.state === 'checking' || store.load === 'loading') {
-    return progress > 0 ? (
+    return (
       <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-muted)' }}>
-            Loading your map — {(progress / 1e6).toFixed(1)} MB
+          <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>Loading your map</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>
+            {progress > 0 ? `${(progress / 1e6).toFixed(1)} MB` : 'Reading it back out of this browser'}
           </div>
         </div>
       </div>
-    ) : null;
+    );
   }
 
   if (store.load === 'failed' || store.load === 'format-mismatch') {
@@ -390,7 +409,12 @@ export function App() {
       />
 
       {conn.sync && (
-        <SyncRibbon progress={conn.sync} onStop={conn.stopSync} onDismiss={conn.dismissSync} />
+        <SyncRibbon
+          progress={conn.sync}
+          onStop={conn.stopSync}
+          onDismiss={conn.dismissSync}
+          onReconnect={conn.sync.phase === 'needs-auth' ? () => setShowConnect(true) : undefined}
+        />
       )}
 
       {/* An empty map with nothing running is a dead end: the sync stopped before it produced
@@ -401,9 +425,14 @@ export function App() {
           <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 12 }}>
             You are connected to Strava, but no activities have been downloaded yet.
           </div>
-          <button className="ghost" onClick={conn.startSync}>
-            Download my activities
-          </button>
+          <div style={{ display: 'flex', gap: 7 }}>
+            <button className="ghost" onClick={conn.startSync}>
+              Download my activities
+            </button>
+            <button className="ghost" onClick={() => setShowConnect(true)}>
+              Reconnect
+            </button>
+          </div>
         </div>
       )}
 
@@ -431,6 +460,17 @@ export function App() {
             onConnect={() => setShowConnect(true)}
             onDisconnect={conn.disconnect}
           />
+          {conn.buildError && (
+            <div className="panel" style={{ left: 12, bottom: 232, width: 290 }}>
+              <h2>Your map could not be rebuilt</h2>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 12.5, lineHeight: 1.5 }}>
+                {conn.buildError}
+              </div>
+              <button className="ghost" onClick={conn.rebuild} style={{ marginTop: 10 }}>
+                Try again
+              </button>
+            </div>
+          )}
           {store.drawerOpen && (
             <StatsDrawer
               extras={store.extras}

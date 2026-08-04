@@ -11,7 +11,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { activityIds, clearAll, STORE_CREDS, put } from '../../lib/db.js';
+import { activityIds, clearAll, STORE_ACTIVITIES, STORE_CREDS, count, put } from '../../lib/db.js';
 import { etaMs, formatDuration, runSync } from '../sync.js';
 
 const NOW = 1_700_000_000;
@@ -64,7 +64,8 @@ interface Route {
   match: string;
   status?: number;
   headers?: Record<string, string>;
-  body?: unknown;
+  /** A function receives the request URL, so a route can model server-side filtering. */
+  body?: unknown | ((url: string) => unknown);
   /** Consumed once, then the next matching route takes over. */
   once?: boolean;
 }
@@ -85,11 +86,15 @@ function stubFetch(routes: Route[]) {
     const route = remaining[i];
     if (route.once) remaining.splice(i, 1);
 
+    const body = typeof route.body === 'function'
+      ? (route.body as (u: string) => unknown)(url)
+      : route.body;
+
     return {
       ok: (route.status ?? 200) < 400,
       status: route.status ?? 200,
       headers: new Headers({ ...RL_OK, ...(route.headers ?? {}) }),
-      json: async () => route.body ?? {},
+      json: async () => body ?? {},
     } as unknown as Response;
   });
 
@@ -110,10 +115,22 @@ async function seedCredentials(): Promise<void> {
   });
 }
 
-/** Pages of summaries, then a short page to end the crawl. */
+/**
+ * Pages of summaries, then a short page to end the crawl.
+ *
+ * Honours `after` exactly as Strava does -- filtering on start_date, server-side. Without this
+ * the stub hands back every activity no matter what the client asked for, and any test about
+ * which activities a crawl can and cannot see is testing nothing. That is not hypothetical: a
+ * regression test written against the naive stub passed against the very bug it was added for.
+ */
 function summaryRoutes(acts: FakeActivity[]): Route[] {
+  const visible = (url: string) => {
+    const after = Number(new URL(url).searchParams.get('after'));
+    const list = Number.isFinite(after) && after > 0 ? acts.filter((a) => a.startTs > after) : acts;
+    return list.map(summaryJson);
+  };
   return [
-    { match: 'athlete/activities', body: acts.map(summaryJson), once: true },
+    { match: 'athlete/activities', body: visible, once: true },
     { match: 'athlete/activities', body: [] },
   ];
 }
@@ -231,11 +248,13 @@ describe('sync', () => {
       { match: '/streams', body: streamJson(6) },
     ]);
 
+    let streamsSeen = 0;
     const p = await runSync({
       signal: ctrl.signal,
       onProgress: (prog) => {
-        // Stop as soon as the first activity is on the wire.
-        if (prog.phase === 'streams') ctrl.abort();
+        // Stop once the first activity has been fetched and the second is starting, so there is
+        // genuinely something buffered for the abort path to preserve.
+        if (prog.phase === 'streams' && ++streamsSeen === 2) ctrl.abort();
       },
     });
 
@@ -254,6 +273,159 @@ describe('sync', () => {
     // The token value must never reach a message a user or a log could see.
     expect(p.message).not.toContain('access-1');
     expect(p.message).not.toContain('refresh-1');
+  });
+});
+
+/**
+ * Regressions for defects an adversarial review found in the first version of this engine.
+ * Each of these shipped, and each was reproduced before being fixed -- so each test here is
+ * known to fail against the code it replaced.
+ */
+describe('sync regressions', () => {
+  beforeEach(async () => {
+    vi.unstubAllGlobals();
+    await clearAll();
+    await seedCredentials();
+  });
+
+  it('retries the activity a 429 interrupted, rather than skipping past it', async () => {
+    const { calls } = stubFetch([
+      ...summaryRoutes([{ id: 1, startTs: NOW }, { id: 2, startTs: NOW - 10 }]),
+      // One transient 429 on activity 1, carrying headroom so it is not daily exhaustion.
+      {
+        match: '/activities/1/streams',
+        status: 429,
+        headers: { 'retry-after': '1', 'x-readratelimit-usage': '20,100' },
+        once: true,
+      },
+      { match: '/streams', body: streamJson(6) },
+    ]);
+
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    // The bug advanced the for-of iterator, so activity 1 was requested once and dropped
+    // without a status, a warning, or any signal at all.
+    const ids = calls
+      .filter((u) => u.includes('/streams'))
+      .map((u) => Number(/activities\/(\d+)\/streams/.exec(u)![1]));
+    expect(ids.filter((n) => n === 1).length).toBe(2);
+    expect([...(await activityIds())].sort()).toEqual([1, 2]);
+    expect(p.phase).toBe('done');
+  });
+
+  it('refreshes an access token that expires mid-run instead of 401ing the rest', async () => {
+    // A token already past the refresh margin, so the first request must re-mint.
+    await put(STORE_CREDS, {
+      k: 'token',
+      v: { refreshToken: 'refresh-1', accessToken: 'stale', expiresAt: Math.floor(Date.now() / 1000) + 10 },
+    });
+
+    const { calls } = stubFetch([
+      { match: 'oauth/token', body: { access_token: 'fresh', refresh_token: 'refresh-2', expires_at: Math.floor(Date.now() / 1000) + 3600 } },
+      ...summaryRoutes([{ id: 1, startTs: NOW }, { id: 2, startTs: NOW - 10 }]),
+      { match: '/streams', body: streamJson(6) },
+    ]);
+
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    // The bug hoisted one token outside the loop and never refreshed, so a resumed backfill
+    // 401ed every remaining activity and still reported "Sync complete".
+    expect(calls.some((u) => u.includes('oauth/token'))).toBe(true);
+    expect(p.phase).toBe('done');
+    expect((await activityIds()).size).toBe(2);
+  });
+
+  it('recovers from a 401 by re-minting once, and gives up cleanly on a second', async () => {
+    const { calls } = stubFetch([
+      ...summaryRoutes([{ id: 1, startTs: NOW }]),
+      { match: 'oauth/token', body: { access_token: 'fresh', refresh_token: 'refresh-2', expires_at: Math.floor(Date.now() / 1000) + 3600 } },
+      { match: '/streams', status: 401 },
+    ]);
+
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    // Exactly one forced re-mint, then a distinct terminal state -- not a generic error, and
+    // not a cascade of failures across every remaining activity.
+    expect(calls.filter((u) => u.includes('oauth/token'))).toHaveLength(1);
+    expect(p.phase).toBe('needs-auth');
+  });
+
+  it('finds an activity uploaded late with an older start date', async () => {
+    const first = { id: 1, startTs: NOW };
+    stubFetch([...summaryRoutes([first]), { match: '/streams', body: streamJson(6) }]);
+    await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+    expect([...(await activityIds())]).toEqual([1]);
+
+    // A hike from three weeks ago, uploaded now. Strava filters `after` on start_date, so a
+    // crawl narrowed to "newer than the newest we know" would never list it again.
+    const late = { id: 2, startTs: NOW - 86400 * 21 };
+    stubFetch([
+      ...summaryRoutes([first, late]),
+      { match: '/streams', body: streamJson(6) },
+    ]);
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    expect([...(await activityIds())].sort()).toEqual([1, 2]);
+    expect(p.phase).toBe('done');
+  });
+
+  it('reports being out of daily budget when the summaries crawl hits the cap', async () => {
+    stubFetch([
+      {
+        match: 'athlete/activities',
+        status: 429,
+        headers: { 'x-readratelimit-usage': '20,1000', 'x-readratelimit-limit': '100,1000' },
+      },
+    ]);
+
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    // The bug slept through three full 15-minute windows and then reported a raw error, even
+    // though a daily cap cannot clear until tomorrow.
+    expect(p.phase).toBe('out-of-budget');
+    expect(p.message).toMatch(/tomorrow/i);
+  });
+
+  it('does not claim "Sync complete" when activities failed to download', async () => {
+    stubFetch([
+      ...summaryRoutes([{ id: 1, startTs: NOW }, { id: 2, startTs: NOW - 10 }]),
+      { match: '/activities/1/streams', body: streamJson(6), once: true },
+      { match: '/streams', status: 500 },
+    ]);
+
+    const p = await runSync({ signal: new AbortController().signal, onProgress: () => {} });
+
+    expect(p.phase).toBe('done');
+    expect(p.message).not.toMatch(/^Sync complete/);
+    expect(p.message).toMatch(/could not be downloaded/i);
+  });
+
+  it('has finished all its writes by the time it resolves, so an erase cannot race it', async () => {
+    const ctrl = new AbortController();
+    stubFetch([
+      ...summaryRoutes([
+        { id: 1, startTs: NOW },
+        { id: 2, startTs: NOW - 10 },
+        { id: 3, startTs: NOW - 20 },
+      ]),
+      { match: '/streams', body: streamJson(6) },
+    ]);
+
+    const run = runSync({
+      signal: ctrl.signal,
+      onProgress: (p) => {
+        if (p.phase === 'streams') ctrl.abort();
+      },
+    });
+
+    // Exactly what disconnect() now does: abort, WAIT for it to stop, then erase. Previously
+    // the erase was issued while the sync's final flush was still queued, and IndexedDB
+    // serialised that write after the clear -- so GPS survived an erase the UI had promised.
+    await run;
+    await clearAll();
+
+    expect(await count(STORE_ACTIVITIES)).toBe(0);
+    expect([...(await activityIds())]).toEqual([]);
   });
 });
 

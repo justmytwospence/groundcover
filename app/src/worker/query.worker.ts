@@ -134,6 +134,28 @@ async function init(): Promise<void> {
     source.activities(),
   ]);
 
+  // The manifest is written last precisely so this can be trusted, but a block whose size
+  // disagrees with what the manifest claims means the set is torn anyway -- an interrupted
+  // write, or eviction of one record. Every offset below is taken from the manifest, so
+  // continuing would either throw deep inside `view()` or, worse, succeed against the previous
+  // build's bytes and render coherent-looking nonsense. A rebuild costs no Strava requests.
+  for (const [name, buf] of [
+    ['sites', sitesBuf],
+    ['touches', touchesBuf],
+  ] as const) {
+    const expected = mf.files[name].byteLength;
+    if (buf.byteLength !== expected) {
+      post({
+        type: 'error',
+        kind: 'format-mismatch',
+        message:
+          `Your stored map is incomplete: ${name} is ${buf.byteLength} bytes where it should ` +
+          `be ${expected}. Rebuilding fixes this and costs no Strava requests.`,
+      });
+      return;
+    }
+  }
+
   manifest = mf;
   activities = actsJson;
   nSites = mf.counts.sites;

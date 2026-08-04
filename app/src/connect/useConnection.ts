@@ -25,6 +25,8 @@ export interface Connection {
   /** What the last build left out. Null until one has run in this session. */
   report: BuildReport | null;
   dismissReport: () => void;
+  /** Set when a build failed. Without this the failure is invisible and the map silently stale. */
+  buildError: string | null;
   startSync: () => void;
   stopSync: () => void;
   dismissSync: () => void;
@@ -55,8 +57,11 @@ export function useConnection(onArtifacts: () => void): Connection {
   const [sync, setSync] = useState<SyncProgress | null>(null);
   const [building, setBuilding] = useState(false);
   const [report, setReport] = useState<BuildReport | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
 
   const abort = useRef<AbortController | null>(null);
+  /** The in-flight sync itself, so `disconnect` can wait for it to actually stop. */
+  const syncDone = useRef<Promise<unknown> | null>(null);
   const busy = useRef(false);
   const dirty = useRef(false);
   const syncing = useRef(false);
@@ -76,7 +81,13 @@ export function useConnection(onArtifacts: () => void): Connection {
         const res = await runBuild();
         if (res.type === 'done') {
           setReport({ seen: res.seen, included: res.activities, excluded: res.excluded });
+          setBuildError(null);
           notify.current();
+        } else if (res.type === 'error') {
+          // Deliberately does NOT re-set `dirty`: a deterministic failure would spin this loop
+          // forever. Surfacing it and offering a manual rebuild is the honest alternative to
+          // retrying silently and leaving the map quietly stale.
+          setBuildError(res.message);
         }
       }
     } finally {
@@ -91,7 +102,7 @@ export function useConnection(onArtifacts: () => void): Connection {
     const ctrl = new AbortController();
     abort.current = ctrl;
 
-    void runSync({
+    const run = runSync({
       signal: ctrl.signal,
       onProgress: setSync,
       onBatch: () => {
@@ -102,6 +113,8 @@ export function useConnection(onArtifacts: () => void): Connection {
       syncing.current = false;
       abort.current = null;
     });
+    syncDone.current = run;
+    void run;
   }, [drain]);
 
   const dismissReport = useCallback(() => setReport(null), []);
@@ -115,6 +128,11 @@ export function useConnection(onArtifacts: () => void): Connection {
 
   const disconnect = useCallback(async () => {
     abort.current?.abort();
+    // Wait for the sync to actually stop before erasing. Aborting only *requests* that it stop;
+    // its cleanup still runs a final flush, and IndexedDB serialises that write strictly after
+    // the clear transaction, so activities the user was promised were erased would land back on
+    // disk -- with the page then reloading to the connect screen, where no erase control exists.
+    await syncDone.current?.catch(() => {});
     await clearAll();
     setSync(null);
     setState('disconnected');
@@ -124,10 +142,8 @@ export function useConnection(onArtifacts: () => void): Connection {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
     void (async () => {
       const result = await completeAuthorization();
-      if (cancelled) return;
 
       if (result.kind === 'error') setAuthError(result.message);
       if (result.kind === 'denied') {
@@ -135,19 +151,18 @@ export function useConnection(onArtifacts: () => void): Connection {
       }
 
       const connected = result.kind === 'connected' || (await isConnected());
-      if (cancelled) return;
       setState(connected ? 'connected' : 'disconnected');
 
       // Arriving back from Strava means they just asked for this; start without a second click.
       if (result.kind === 'connected') startSync();
     })();
-    return () => {
-      cancelled = true;
-    };
+    // No cancellation flag. StrictMode's simulated unmount is not a real one, so discarding the
+    // result on cleanup threw away the only invocation that actually saw the OAuth response --
+    // which is how every auth error came to be silent in development.
   }, [startSync]);
 
   return {
-    state, authError, sync, building, report,
+    state, authError, sync, building, report, buildError,
     startSync, stopSync, dismissSync, dismissReport, rebuild, disconnect,
   };
 }

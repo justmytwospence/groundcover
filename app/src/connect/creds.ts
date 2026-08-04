@@ -75,11 +75,37 @@ export async function accessToken(): Promise<string> {
   }
 
   const minted = await mintAccessToken(creds, stored);
-  await saveTokens({
-    refreshToken: minted.refreshToken,
-    accessToken: minted.accessToken,
-    expiresAt: minted.expiresAt,
-    athleteId: stored.athleteId,
-  });
+  try {
+    await saveTokens({
+      refreshToken: minted.refreshToken,
+      accessToken: minted.accessToken,
+      expiresAt: minted.expiresAt,
+      athleteId: stored.athleteId,
+    });
+  } catch (err) {
+    // The write failed -- storage full, most likely -- but Strava has already invalidated the
+    // refresh token we came in with. The one in memory is now the only valid credential in
+    // existence and it is about to be lost, so say so in terms that name the remedy. Silently
+    // returning the access token would work for six hours and then strand the user for good.
+    throw new Error(
+      'Your Strava sign-in was renewed but could not be saved, most likely because this ' +
+        'browser is out of storage. Free up space and sign in again. Your downloaded ' +
+        'activities are untouched.',
+      { cause: err },
+    );
+  }
   return minted.accessToken;
+}
+
+/**
+ * Force the next `accessToken()` call to mint a fresh one.
+ *
+ * Strava can reject a token that has not yet reached its stated expiry -- the user revoked the
+ * app, or it was invalidated server-side. Only a 401 reveals that, so the caller that sees one
+ * needs a way to say "the cached value is a lie" without knowing anything about storage layout.
+ */
+export async function invalidateAccessToken(): Promise<void> {
+  const stored = await loadTokens();
+  if (!stored) return;
+  await saveTokens({ refreshToken: stored.refreshToken, athleteId: stored.athleteId });
 }

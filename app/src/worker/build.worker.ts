@@ -99,13 +99,21 @@ async function build(): Promise<void> {
   const excluded: Record<string, number> = {};
   for (const r of builder.rejected) excluded[r.reason] = (excluded[r.reason] ?? 0) + 1;
 
-  // One record per block, matching what ArtifactSource reads. Written before the done message
-  // so a caller that reloads the instant it arrives always finds a complete set.
-  await put(STORE_ARTIFACTS, { name: 'manifest', data: out.manifest });
+  // One record per block, matching what ArtifactSource reads, and all of it written before the
+  // done message so a caller that reloads immediately finds a complete set.
+  //
+  // The manifest goes LAST, and that ordering is the whole safety property. Each put() commits
+  // its own transaction, so a failure partway through -- a quota error while writing 40 MB of
+  // sites is the realistic one -- leaves a partial set behind. Written first, the new manifest
+  // would describe blocks that were never written, and the reader would either throw or index
+  // the previous build's bytes with this build's offsets and render silent nonsense. Written
+  // last, a partial write leaves the old manifest beside old blocks: stale, but consistent, and
+  // the map keeps working until a rebuild succeeds.
   await put(STORE_ARTIFACTS, { name: 'sites', data: out.sites });
   await put(STORE_ARTIFACTS, { name: 'touches', data: out.touches });
   await put(STORE_ARTIFACTS, { name: 'tracks', data: out.tracks });
   await put(STORE_ARTIFACTS, { name: 'activities', data: out.activities });
+  await put(STORE_ARTIFACTS, { name: 'manifest', data: out.manifest });
 
   post({
     type: 'done',

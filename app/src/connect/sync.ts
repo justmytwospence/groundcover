@@ -35,15 +35,13 @@ import {
   STORE_SYNC,
   type StoredActivity,
 } from '../lib/db.js';
-import { accessToken } from './creds.js';
+import { accessToken, invalidateAccessToken } from './creds.js';
 
 /** Strava's short read window aligns to :00, :15, :30 and :45. */
 const WINDOW_MS = 15 * 60 * 1000;
 const PACE_MS = 300;
 /** Assumed only for the first ETA, before any response has reported real headroom. */
 const ASSUMED_SHORT_LIMIT = 100;
-/** One day of overlap on incremental runs, so a late upload is never missed. */
-const AFTER_MARGIN_S = 86_400;
 /** The status map is rewritten whole, so it is written on a count rather than every activity. */
 const STATUS_FLUSH_EVERY = 20;
 
@@ -90,6 +88,7 @@ export type SyncPhase =
   | 'stopped'
   | 'out-of-budget'
   | 'out-of-space'
+  | 'needs-auth'
   | 'error';
 
 export interface SyncProgress {
@@ -114,6 +113,8 @@ export interface SyncProgress {
 class DailyBudgetExhausted extends Error {}
 /** Raised when the browser's storage is full. Everything already written stays valid. */
 class OutOfSpace extends Error {}
+/** Raised when Strava rejects the credential outright, so only re-authorizing can fix it. */
+class AuthRejected extends Error {}
 /** Raised when the caller aborts. */
 class Stopped extends Error {}
 
@@ -282,17 +283,19 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
   progress({ phase: 'starting' });
 
   try {
-    const token = await accessToken();
-
     // ---- Summaries -------------------------------------------------------------------------
     progress({ phase: 'summaries', message: 'Asking Strava what you have done' });
 
-    const newest = Object.values(summaries.activities).reduce((m, a) => Math.max(m, a.startTs), 0);
-    const after = newest > 0 ? newest - AFTER_MARGIN_S : undefined;
-
+    // Deliberately unfiltered. Strava's `after` filters on start_date, not upload time, so
+    // narrowing the crawl to "newer than the newest we know" permanently hides an activity
+    // uploaded late with an older start date -- a GPX imported weeks after the hike, a watch
+    // synced on return from a trip. Nothing would ever list it again, and the ledger would
+    // credit its ground to whichever later activity covered it. A full crawl of 2,000
+    // activities costs about 11 reads, well under 1% of a day's budget, which is a small price
+    // for the guarantee that what Strava has is what we see.
     for (let attempt = 0; ; attempt++) {
       try {
-        for await (const page of pageActivities({ accessToken: token, after })) {
+        for await (const page of pageActivities({ accessToken: await accessToken() })) {
           for (const raw of page) {
             let row: SummaryRow | null = null;
             try {
@@ -306,12 +309,20 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
         }
         break;
       } catch (err) {
-        // Paging is idempotent and costs ~10 reads, so restarting it after a wait is cheap.
-        if (err instanceof RateLimitError && attempt < 3) {
-          const waitMs = err.retryAfterMs ?? msUntilNextWindow();
-          progress({ phase: 'waiting', waitUntil: Date.now() + waitMs, message: 'Rate limited while listing activities' });
-          await sleep(waitMs, signal);
-          continue;
+        if (err instanceof RateLimitError) {
+          // A daily-cap 429 cannot clear by waiting -- the window it needs is tomorrow. Without
+          // this the loop burns three full 15-minute sleeps and then reports a raw error,
+          // instead of the "come back tomorrow" state that exists for exactly this case.
+          if (err.usage && err.usage.dailyUsage >= err.usage.dailyLimit) {
+            throw new DailyBudgetExhausted();
+          }
+          // Paging is idempotent and costs ~10 reads, so restarting it after a wait is cheap.
+          if (attempt < 3) {
+            const waitMs = err.retryAfterMs ?? msUntilNextWindow();
+            progress({ phase: 'waiting', waitUntil: Date.now() + waitMs, message: 'Rate limited while listing activities' });
+            await sleep(waitMs, signal);
+            continue;
+          }
         }
         throw err;
       }
@@ -348,6 +359,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
 
     // ---- Streams ---------------------------------------------------------------------------
     let done = 0;
+    let failed = 0;
     let sinceFlush = 0;
     let sinceBatch = 0;
     const buffer: StoredActivity[] = [];
@@ -396,51 +408,77 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
         });
 
         const key = String(a.id);
-        try {
-          const res = await stravaGet<unknown>(`/activities/${a.id}/streams`, {
-            accessToken: token,
-            query: { keys: 'latlng,time,altitude', key_by_type: 'true' },
-          });
-          if (res.rateLimit) rateLimit = res.rateLimit;
-          const set = StreamSetSchema.parse(res.data);
-          const rec = toStored(a, set);
-          if (rec === null) {
-            // key_by_type omits unavailable streams, so no GPS shows up as an absent latlng.
-            status.streams[key] = 'skipped:no-gps';
-            warnings.push({ activityId: a.id, name: a.name, reason: 'no GPS recorded' });
-          } else {
-            buffer.push(rec);
-            status.streams[key] = 'ok';
-          }
-        } catch (err) {
-          if (err instanceof Stopped) throw err;
-          if (err instanceof RateLimitError) {
-            if (err.usage) rateLimit = err.usage;
-            if (err.usage && err.usage.dailyUsage >= err.usage.dailyLimit) {
-              throw new DailyBudgetExhausted();
+        // An inner loop, not a `continue` on the outer one. `continue` inside
+        // `for (const a of pending)` advances the iterator, so the activity a 429 interrupted
+        // was skipped rather than retried, and skipped without recording a status or a warning
+        // -- it simply vanished from the run while the ribbon reported success.
+        let authRetried = false;
+        for (;;) {
+          if (signal.aborted) throw new Stopped();
+          try {
+            const res = await stravaGet<unknown>(`/activities/${a.id}/streams`, {
+              // Resolved per request. A backfill can run for hours across several sittings and
+              // an access token lives six; hoisting one outside the loop meant every activity
+              // after expiry failed with a 401 that nothing recognised.
+              accessToken: await accessToken(),
+              query: { keys: 'latlng,time,altitude', key_by_type: 'true' },
+            });
+            if (res.rateLimit) rateLimit = res.rateLimit;
+            const set = StreamSetSchema.parse(res.data);
+            const rec = toStored(a, set);
+            if (rec === null) {
+              // key_by_type omits unavailable streams, so no GPS shows up as an absent latlng.
+              status.streams[key] = 'skipped:no-gps';
+              warnings.push({ activityId: a.id, name: a.name, reason: 'no GPS recorded' });
+            } else {
+              buffer.push(rec);
+              status.streams[key] = 'ok';
             }
-            await flushBuffer();
-            const waitMs = err.retryAfterMs ?? msUntilNextWindow();
-            progress({
-              phase: 'waiting',
-              remaining: pending.length - done,
-              waitUntil: Date.now() + waitMs,
-              message: 'Strava asked us to slow down',
-            });
-            await sleep(waitMs, signal);
-            rateLimit = null;
-            continue; // Retry this same activity rather than dropping it.
-          }
-          if (err instanceof StravaHttpError && err.status === 404) {
-            status.streams[key] = 'skipped:no-gps';
-            warnings.push({ activityId: a.id, name: a.name, reason: 'no GPS recorded' });
-          } else {
-            status.streams[key] = `error:${err instanceof StravaHttpError ? err.status : 'fetch'}`;
-            warnings.push({
-              activityId: a.id,
-              name: a.name,
-              reason: 'could not be fetched; it will be retried next time',
-            });
+            break;
+          } catch (err) {
+            if (err instanceof Stopped) throw err;
+
+            if (err instanceof RateLimitError) {
+              if (err.usage) rateLimit = err.usage;
+              if (err.usage && err.usage.dailyUsage >= err.usage.dailyLimit) {
+                throw new DailyBudgetExhausted();
+              }
+              await flushBuffer();
+              const waitMs = err.retryAfterMs ?? msUntilNextWindow();
+              progress({
+                phase: 'waiting',
+                remaining: pending.length - done,
+                waitUntil: Date.now() + waitMs,
+                message: 'Strava asked us to slow down',
+              });
+              await sleep(waitMs, signal);
+              rateLimit = null;
+              continue; // Genuinely this same activity now.
+            }
+
+            // Strava can reject a token before its stated expiry when the user revokes the app.
+            // Worth exactly one forced re-mint: a second 401 means the credential is dead, and
+            // hammering it would turn every remaining activity into a failure.
+            if (err instanceof StravaHttpError && err.status === 401 && !authRetried) {
+              authRetried = true;
+              await invalidateAccessToken();
+              continue;
+            }
+            if (err instanceof StravaHttpError && err.status === 401) throw new AuthRejected();
+
+            if (err instanceof StravaHttpError && err.status === 404) {
+              status.streams[key] = 'skipped:no-gps';
+              warnings.push({ activityId: a.id, name: a.name, reason: 'no GPS recorded' });
+            } else {
+              status.streams[key] = `error:${err instanceof StravaHttpError ? err.status : 'fetch'}`;
+              failed++;
+              warnings.push({
+                activityId: a.id,
+                name: a.name,
+                reason: 'could not be downloaded; it will be retried next time',
+              });
+            }
+            break;
           }
         }
 
@@ -484,6 +522,17 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
             `further, free up disk space, or use a browser with more room.`,
         });
       }
+      if (err instanceof AuthRejected) {
+        opts.onBatch?.(stored);
+        return progress({
+          phase: 'needs-auth',
+          remaining: pending.length - done,
+          message:
+            'Strava is no longer accepting this connection. This usually means the app was ' +
+            'revoked, or its Client Secret changed. Reconnect to carry on -- everything ' +
+            'downloaded so far is kept.',
+        });
+      }
       if (err instanceof Stopped) {
         opts.onBatch?.(stored);
         return progress({ phase: 'stopped', remaining: pending.length - done, message: 'Stopped' });
@@ -494,11 +543,38 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
     await flushBuffer();
     await put(STORE_SYNC, status);
     opts.onBatch?.(stored);
-    return progress({ phase: 'done', remaining: 0, current: null, message: 'Sync complete' });
+    return progress({
+      phase: 'done',
+      remaining: 0,
+      current: null,
+      // Reaching the end of the list is not the same as getting everything. Saying "Sync
+      // complete" over a run where activities failed is the kind of quiet inaccuracy that
+      // makes someone trust a number they should not.
+      message:
+        failed > 0
+          ? `Finished, but ${failed} ${failed === 1 ? 'activity' : 'activities'} could not be ` +
+            `downloaded. They will be retried next time.`
+          : 'Sync complete',
+    });
   } catch (err) {
     if (err instanceof Stopped) return progress({ phase: 'stopped', message: 'Stopped' });
     if (err instanceof OutOfSpace) {
       return progress({ phase: 'out-of-space', message: 'This browser is out of storage.' });
+    }
+    // Reachable from the summaries crawl, which runs before the streams loop's handlers exist.
+    if (err instanceof DailyBudgetExhausted) {
+      return progress({
+        phase: 'out-of-budget',
+        message:
+          "Strava's daily request limit is already used up. This is normal partway through a " +
+          'large history. Come back tomorrow and it will pick up where it stopped.',
+      });
+    }
+    if (err instanceof AuthRejected) {
+      return progress({
+        phase: 'needs-auth',
+        message: 'Strava is no longer accepting this connection. Reconnect to carry on.',
+      });
     }
     return progress({
       phase: 'error',
