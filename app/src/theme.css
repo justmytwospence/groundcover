@@ -866,3 +866,43 @@ button.chart-toggle {
   padding: 24px;
   overflow-y: auto;
 }
+
+/* The paste-the-address step, which is the path that works regardless of what the user's Strava
+   app already has in its single callback-domain slot. */
+.connect-paste {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border: 1px solid rgba(237, 161, 0, 0.35);
+  background: rgba(237, 161, 0, 0.05);
+  border-radius: var(--radius);
+}
+
+.connect-paste h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.connect-paste p {
+  margin: 0 0 9px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.connect-paste strong {
+  color: var(--text-primary);
+}
+
+.connect-paste code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-primary);
+  word-break: break-all;
+}

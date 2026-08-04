@@ -24,15 +24,30 @@ interface Row<T> {
   v: T;
 }
 
-export async function saveCreds(creds: Creds): Promise<void> {
-  await put(STORE_CREDS, { k: KEY_APP, v: creds } satisfies Row<Creds>);
+/**
+ * The user's app, including the one setting Strava will not let them have twice.
+ *
+ * `callbackDomain` is stored because Strava permits exactly one per application and it is very
+ * often already spoken for -- a CLI tool that set it to localhost, or another project. Rather
+ * than demand they change it and break whatever depended on it, we build the authorize request
+ * around whatever they already have.
+ */
+export interface AppConfig extends Creds {
+  callbackDomain: string;
 }
 
-export async function loadCreds(): Promise<Creds | null> {
-  const row = await get<Row<Creds>>(STORE_CREDS, KEY_APP);
+export const DEFAULT_CALLBACK_DOMAIN = 'localhost';
+
+export async function saveCreds(creds: AppConfig): Promise<void> {
+  await put(STORE_CREDS, { k: KEY_APP, v: creds } satisfies Row<AppConfig>);
+}
+
+export async function loadCreds(): Promise<AppConfig | null> {
+  const row = await get<Row<AppConfig>>(STORE_CREDS, KEY_APP);
   const v = row?.v;
   if (!v || !v.clientId || !v.clientSecret) return null;
-  return v;
+  // Records written before the domain was configurable predate this field.
+  return { ...v, callbackDomain: v.callbackDomain || DEFAULT_CALLBACK_DOMAIN };
 }
 
 export async function saveTokens(state: TokenState): Promise<void> {

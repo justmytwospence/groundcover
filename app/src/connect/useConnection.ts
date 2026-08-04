@@ -32,6 +32,8 @@ export interface Connection {
   dismissSync: () => void;
   /** Recompute the map from activities already downloaded. Costs no Strava requests. */
   rebuild: () => void;
+  /** Called when authorization completed outside the redirect flow, from a pasted address. */
+  markConnected: () => void;
   disconnect: () => Promise<void>;
 }
 
@@ -126,6 +128,12 @@ export function useConnection(onArtifacts: () => void): Connection {
     void drain();
   }, [drain]);
 
+  const markConnected = useCallback(() => {
+    setAuthError(null);
+    setState('connected');
+    startSync();
+  }, [startSync]);
+
   const disconnect = useCallback(async () => {
     abort.current?.abort();
     // Wait for the sync to actually stop before erasing. Aborting only *requests* that it stop;
@@ -163,6 +171,6 @@ export function useConnection(onArtifacts: () => void): Connection {
 
   return {
     state, authError, sync, building, report, buildError,
-    startSync, stopSync, dismissSync, dismissReport, rebuild, disconnect,
+    startSync, stopSync, dismissSync, dismissReport, rebuild, markConnected, disconnect,
   };
 }

@@ -369,7 +369,15 @@ export function App() {
   }
 
   if (showConnect || (store.load !== 'ready' && conn.state === 'disconnected')) {
-    return <ConnectFlow error={conn.authError} />;
+    return (
+      <ConnectFlow
+        error={conn.authError}
+        onConnected={() => {
+          setShowConnect(false);
+          conn.markConnected();
+        }}
+      />
+    );
   }
 
   return (

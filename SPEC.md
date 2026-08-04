@@ -372,6 +372,27 @@ a another tool sync will make both see 429s — both retry, so this degrades rat
 Never print, log, or commit token values. `.env.local` and `.strava-token.json` are
 gitignored from the first commit.
 
+**The callback domain is the user's, not ours.** Strava permits exactly one Authorization
+Callback Domain per application, and most people's is already spoken for -- a CLI tool that set
+it to `localhost`, another project, an old experiment. Demanding they change it breaks whatever
+depended on it, and would make any future domain move a migration event for every existing user.
+
+We do not demand it. Strava validates the redirect **only** when issuing the authorization code;
+the token exchange sends `client_id`, `client_secret`, `grant_type` and `code`, and never a
+redirect URI at all (`packages/strava/src/auth.ts`). So the redirect only has to land somewhere
+the user can read a URL -- it does not have to land on us. The user tells us the domain their app
+already has, and:
+
+- if it matches this host, the redirect is handled automatically and they see nothing unusual;
+- otherwise Strava opens in a separate tab, the redirect lands on their own domain, and they
+  paste the resulting address back. `completeFromPastedUrl` extracts the code and exchanges it
+  directly.
+
+`localhost` is the recommended value and the default, because nothing is listening there: the
+browser fails to connect, and the authorization code is never transmitted to any server at all.
+Steering people to it is a real security property, not a convenience -- a callback domain
+pointing at a site the user does not control would put the code in that site's request logs.
+
 **The public build shares nothing.** Every visitor registers their own Strava application and
 holds their own credentials in their own browser. This is not a convenience: Strava counts
 rate limits *per application*, so one shared registration would run dry after a handful of
