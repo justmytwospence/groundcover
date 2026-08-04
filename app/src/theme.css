@@ -479,3 +479,307 @@ button.chart-toggle {
   border-radius: 2px;
   flex: none;
 }
+
+/* ---------------------------------------------------------------------------
+   Onboarding and sync.
+
+   These are the only full-page surfaces in the app; everything else is a panel
+   floating over the map. They scroll, because the credentials walkthrough is
+   genuinely long and a clipped step four is a support burden.
+   --------------------------------------------------------------------------- */
+
+.connect-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 48px 24px 72px;
+}
+
+.connect-card {
+  width: 100%;
+  max-width: 620px;
+  height: fit-content;
+}
+
+.connect-title {
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin: 0 0 18px;
+}
+
+.connect-title em {
+  font-style: normal;
+  color: var(--frontier);
+}
+
+.connect-lede {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin: 0 0 18px;
+}
+
+.connect-numbers {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin: 26px 0;
+  padding: 20px 22px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+}
+
+.connect-num {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.connect-num-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.connect-num-arrow {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.connect-promise {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--panel-border);
+  border-left: 2px solid var(--frontier);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+
+.connect-promise strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.connect-fine {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: 16px 0 0;
+}
+
+.connect-steps {
+  padding-left: 20px;
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.connect-steps li {
+  margin-bottom: 14px;
+}
+
+.connect-steps strong,
+.connect-fine strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.connect-steps a {
+  color: var(--frontier);
+}
+
+.connect-steps code,
+.connect-copy code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.connect-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 9px 0;
+}
+
+.connect-copy code {
+  font-size: 14px;
+  padding: 7px 11px;
+}
+
+.connect-field {
+  margin-bottom: 14px;
+}
+
+.connect-field label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.connect-field input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.connect-field input:focus {
+  outline: none;
+  border-color: var(--frontier);
+}
+
+.connect-error,
+.connect-toast {
+  background: rgba(220, 70, 50, 0.14);
+  border: 1px solid rgba(220, 70, 50, 0.4);
+  border-radius: 6px;
+  padding: 11px 14px;
+  color: #ffb3a3;
+  font-size: 13px;
+  line-height: 1.55;
+  margin-top: 14px;
+}
+
+.connect-toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 560px;
+  z-index: 40;
+  margin: 0;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+/* --- sync ribbon --- */
+
+.sync-ribbon {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 32px));
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  z-index: 30;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.sync-ribbon-done {
+  border-color: rgba(237, 161, 0, 0.35);
+}
+
+.sync-ribbon-main {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.sync-ribbon-line1 {
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-ribbon-line2 {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sync-ribbon-actions {
+  display: flex;
+  gap: 7px;
+  flex: none;
+}
+
+.sync-bar {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.sync-bar-fill {
+  height: 100%;
+  background: var(--frontier);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.sync-warnings {
+  flex-basis: 100%;
+  margin-top: 10px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sync-warnings p {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.sync-warnings ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sync-warnings li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.sync-warnings li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-warnings li em {
+  font-style: normal;
+  color: var(--text-muted);
+  flex: none;
+}

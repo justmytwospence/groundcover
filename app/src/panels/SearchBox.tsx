@@ -1,9 +1,13 @@
 /**
- * Combined search over your own activities and over place names.
+ * Search over your own activities.
  *
- * Activities match locally and instantly against the already-loaded list; places go to
- * Nominatim, debounced. Activity results come first because in this tool "where was that
- * ride" is asked far more often than "where is Reykjavik".
+ * Matches locally and instantly against the already-loaded list -- no request leaves the
+ * browser, which is the same promise the rest of the tool makes.
+ *
+ * Place-name search used to live here too, backed by Nominatim. It is gone deliberately.
+ * Nominatim's usage policy forbids using it behind a public autocomplete, and it requires an
+ * identifying User-Agent that a browser will not let a page set. A personal tool could get away
+ * with it; a site anyone can open cannot. Activity search was always the half people used.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,12 +15,6 @@ import type { ActivitySummary } from '@um/ledger';
 import { useStore } from '../state/store.js';
 
 export type Bounds = [number, number, number, number];
-
-interface PlaceHit {
-  kind: 'place';
-  label: string;
-  bounds: Bounds;
-}
 
 interface ActivityHit {
   kind: 'activity';
@@ -26,23 +24,13 @@ interface ActivityHit {
   bounds: Bounds;
 }
 
-type Hit = PlaceHit | ActivityHit;
+type Hit = ActivityHit;
 
-interface NominatimRow {
-  display_name: string;
-  boundingbox: [string, string, string, string];
-}
-
-/** Cap activities harder when places are also on offer, so the Places group is never pushed
- *  below the fold. A city that shares a name with a dozen of your runs is the common case. */
-const MAX_ACTIVITY_HITS = 6;
-const MAX_ACTIVITY_HITS_WITH_PLACES = 4;
-const MAX_PLACE_HITS = 4;
+const MAX_ACTIVITY_HITS = 8;
 
 export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number | null) => void }) {
   const activities = useStore((s) => s.activities);
   const [q, setQ] = useState('');
-  const [places, setPlaces] = useState<PlaceHit[]>([]);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -68,47 +56,11 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
     return out;
   }, [q, activities]);
 
-  // Nominatim asks for no more than one request a second and no bulk querying; a debounce
-  // plus a 3-character floor keeps a personal tool well inside that.
-  useEffect(() => {
-    const needle = q.trim();
-    if (needle.length < 3) {
-      setPlaces([]);
-      return;
-    }
-    const ctl = new AbortController();
-    const t = window.setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${MAX_PLACE_HITS}&q=${encodeURIComponent(needle)}`,
-          { signal: ctl.signal, headers: { Accept: 'application/json' } },
-        );
-        if (!res.ok) return;
-        const rows = (await res.json()) as NominatimRow[];
-        setPlaces(
-          rows.map((r) => {
-            const [s, n, w, e] = r.boundingbox.map(Number);
-            return { kind: 'place' as const, label: r.display_name, bounds: [w, s, e, n] as Bounds };
-          }),
-        );
-      } catch {
-        // A failed or aborted lookup just means no place results; activities still work.
-      }
-    }, 450);
-    return () => {
-      ctl.abort();
-      window.clearTimeout(t);
-    };
-  }, [q]);
-
   const shownActivities = useMemo(
-    () => activityHits.slice(0, places.length ? MAX_ACTIVITY_HITS_WITH_PLACES : MAX_ACTIVITY_HITS),
-    [activityHits, places.length],
+    () => activityHits.slice(0, MAX_ACTIVITY_HITS),
+    [activityHits],
   );
-  const hits: Hit[] = useMemo(
-    () => [...shownActivities, ...places],
-    [shownActivities, places],
-  );
+  const hits: Hit[] = shownActivities;
   const moreActivities = activityHits.length - shownActivities.length;
 
   useEffect(() => setCursor(0), [q]);
@@ -172,8 +124,8 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
             go(hits[cursor]);
           }
         }}
-        placeholder="Search activities or places"
-        aria-label="Search activities or places"
+        placeholder="Search your activities"
+        aria-label="Search your activities"
         style={{
           width: '100%',
           background: 'transparent',
@@ -188,16 +140,10 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
       {open && hits.length > 0 && (
         <div style={{ borderTop: '1px solid var(--panel-border)', maxHeight: 340, overflowY: 'auto' }}>
           {hits.map((h, i) => {
-            // Group headers make it obvious that both kinds of result are on offer. Without
-            // them a city buried under six same-named runs reads as "no place search".
             const header =
-              i === 0 && h.kind === 'activity'
-                ? `Activities${moreActivities > 0 ? ` (${activityHits.length} matches)` : ''}`
-                : h.kind === 'place' && (i === 0 || hits[i - 1].kind === 'activity')
-                  ? 'Places'
-                  : null;
+              i === 0 ? `Activities${moreActivities > 0 ? ` (${activityHits.length} matches)` : ''}` : null;
             return (
-              <div key={`${h.kind}-${i}-${h.label}`}>
+              <div key={`${i}-${h.label}`}>
                 {header && (
                   <div
                     style={{
@@ -235,9 +181,8 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
                       width: 8,
                       height: 8,
                       marginTop: 1,
-                      borderRadius: h.kind === 'place' ? '50% 50% 50% 0' : 1,
-                      transform: h.kind === 'place' ? 'rotate(-45deg)' : 'none',
-                      background: h.kind === 'place' ? 'var(--text-muted)' : 'var(--frontier)',
+                      borderRadius: 1,
+                      background: 'var(--frontier)',
                     }}
                   />
                   <span style={{ minWidth: 0, flex: 1 }}>
@@ -252,9 +197,7 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
                     >
                       {h.label}
                     </span>
-                    {h.kind === 'activity' && (
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{h.sub}</span>
-                    )}
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{h.sub}</span>
                   </span>
                 </button>
               </div>

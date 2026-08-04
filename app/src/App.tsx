@@ -6,9 +6,12 @@ import { StatsCard } from './panels/StatsCard.js';
 import { Legend } from './panels/Legend.js';
 import { Scrubber } from './panels/Scrubber.js';
 import { StatsDrawer } from './panels/StatsDrawer.js';
-import { Setup } from './panels/Setup.js';
 import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { SitePopup } from './panels/SitePopup.js';
+import { AccountPanel } from './panels/AccountPanel.js';
+import { ConnectFlow } from './connect/ConnectFlow.js';
+import { SyncRibbon } from './connect/SyncRibbon.js';
+import { useConnection } from './connect/useConnection.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
 import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
@@ -48,6 +51,11 @@ export function App() {
   const pickPoint = useRef<{ x: number; y: number } | null>(null);
   const hoverTimer = useRef<number | undefined>(undefined);
   const [progress, setProgress] = useState(0);
+  /** Bumped when a rebuild lands. Tearing the query worker down and starting a fresh one is the
+   *  whole reload: a new worker re-reads storage from scratch, so there is no partial-update
+   *  path through the engine that could leave stale sites alongside new ones. */
+  const [reloadKey, setReloadKey] = useState(0);
+  const conn = useConnection(useCallback(() => setReloadKey((k) => k + 1), []));
 
   // ---- worker lifecycle ----------------------------------------------------------------
   useEffect(() => {
@@ -129,7 +137,7 @@ export function App() {
 
     w.postMessage({ type: 'init' });
     return () => w.terminate();
-  }, []);
+  }, [reloadKey]);
 
   /** Hand the geometry to the map once both sides are ready, whichever arrives second. */
   const applyGeometry = useCallback(() => {
@@ -301,8 +309,43 @@ export function App() {
     return () => window.clearTimeout(hoverTimer.current);
   }, [hover]);
 
-  if (store.load !== 'ready' && store.load !== 'loading') {
-    return <Setup state={store.load} message={store.loadError} />;
+  // Order matters here. Existing artifacts always win: they mean there is a map to show, which
+  // is true both for a returning visitor and for local development against files built by the
+  // Node pipeline, where nothing was ever "connected" in this browser at all. Only once we know
+  // there is nothing to draw does the question of connecting arise.
+  if (conn.state === 'checking' || store.load === 'loading') {
+    return progress > 0 ? (
+      <div className="connect-scroll">
+        <div className="connect-card" style={{ margin: 'auto', textAlign: 'center' }}>
+          <div style={{ color: 'var(--text-muted)' }}>
+            Loading your map — {(progress / 1e6).toFixed(1)} MB
+          </div>
+        </div>
+      </div>
+    ) : null;
+  }
+
+  if (store.load === 'failed' || store.load === 'format-mismatch') {
+    return (
+      <div className="connect-scroll">
+        <div className="connect-card" style={{ margin: 'auto' }}>
+          <h1 className="connect-title" style={{ fontSize: 24 }}>
+            Your stored map could not be read
+          </h1>
+          <p className="connect-lede">
+            {store.loadError} Rebuilding from the activities already downloaded usually fixes it,
+            and costs no Strava requests.
+          </p>
+          <button className="ghost" onClick={conn.rebuild}>
+            Rebuild
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (store.load !== 'ready' && conn.state === 'disconnected') {
+    return <ConnectFlow error={conn.authError} />;
   }
 
   return (
@@ -340,11 +383,29 @@ export function App() {
         }}
       />
 
-      {store.load === 'loading' && (
-        <div className="panel" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 260 }}>
-          <h2>Loading</h2>
-          <div style={{ color: 'var(--text-secondary)' }}>
-            {(progress / 1e6).toFixed(1)} MB of artifacts
+      {conn.sync && (
+        <SyncRibbon progress={conn.sync} onStop={conn.stopSync} onDismiss={conn.dismissSync} />
+      )}
+
+      {/* An empty map with nothing running is a dead end: the sync stopped before it produced
+          anything, or an earlier visit was interrupted. Say so and offer the way forward. */}
+      {store.load === 'no-artifacts' && !conn.sync && !conn.building && (
+        <div className="panel" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 320 }}>
+          <h2>Nothing here yet</h2>
+          <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 12 }}>
+            You are connected to Strava, but no activities have been downloaded yet.
+          </div>
+          <button className="ghost" onClick={conn.startSync}>
+            Download my activities
+          </button>
+        </div>
+      )}
+
+      {conn.building && !conn.sync && (
+        <div className="sync-ribbon">
+          <div className="sync-ribbon-main">
+            <div className="sync-ribbon-line1">Working out your coverage…</div>
+            <div className="sync-ribbon-line2">This runs over your whole history at once.</div>
           </div>
         </div>
       )}
@@ -356,6 +417,11 @@ export function App() {
           <StatsCard />
           <Legend />
           <Scrubber />
+          <AccountPanel
+            busy={conn.sync !== null || conn.building}
+            onSync={conn.startSync}
+            onDisconnect={conn.disconnect}
+          />
           {store.drawerOpen && (
             <StatsDrawer
               extras={store.extras}

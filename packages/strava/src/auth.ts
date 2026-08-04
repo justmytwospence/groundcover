@@ -102,7 +102,12 @@ export async function exchangeCode(
   };
 }
 
-export function authorizeUrl(clientId: string, redirectUri: string): string {
+/**
+ * `state` is echoed back on the redirect. The loopback script has no use for it, but a browser
+ * flow needs it: the redirect lands on an ordinary GET that anyone can point a victim's browser
+ * at, so the value proves the response belongs to a request this tab actually started.
+ */
+export function authorizeUrl(clientId: string, redirectUri: string, state?: string): string {
   const query = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -110,5 +115,6 @@ export function authorizeUrl(clientId: string, redirectUri: string): string {
     approval_prompt: 'force',
     scope: REQUIRED_SCOPE,
   });
+  if (state !== undefined) query.set('state', state);
   return `${AUTHORIZE_URL}?${query.toString()}`;
 }
