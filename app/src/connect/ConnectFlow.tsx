@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { beginAuthorization, callbackDomain } from './oauth.js';
 import { loadCreds, saveCreds } from './creds.js';
+import { requestPersistence } from '../lib/db.js';
 
 export type Stage = 'landing' | 'credentials';
 
@@ -128,6 +129,9 @@ function Credentials({ onBack }: { onBack: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      // Inside the click on purpose: Chrome refuses a persistence request that does not come
+      // from a user gesture, and this is the last gesture before the page leaves for Strava.
+      await requestPersistence();
       await saveCreds({ clientId: id, clientSecret: secret });
       await beginAuthorization();
     } catch (err) {

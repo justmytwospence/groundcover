@@ -27,6 +27,7 @@ import {
 import {
   activityIds,
   get,
+  isQuotaError,
   put,
   putAll,
   LAT_LNG_SCALE,
@@ -88,6 +89,7 @@ export type SyncPhase =
   | 'done'
   | 'stopped'
   | 'out-of-budget'
+  | 'out-of-space'
   | 'error';
 
 export interface SyncProgress {
@@ -110,6 +112,8 @@ export interface SyncProgress {
 
 /** Raised when the daily read budget runs out. A normal end to a run, not a failure. */
 class DailyBudgetExhausted extends Error {}
+/** Raised when the browser's storage is full. Everything already written stays valid. */
+class OutOfSpace extends Error {}
 /** Raised when the caller aborts. */
 class Stopped extends Error {}
 
@@ -350,7 +354,14 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
 
     const flushBuffer = async () => {
       if (buffer.length === 0) return;
-      await putAll(STORE_ACTIVITIES, buffer);
+      try {
+        await putAll(STORE_ACTIVITIES, buffer);
+      } catch (err) {
+        // Everything written before this point is intact and the map built from it is correct.
+        // Stopping here is strictly better than continuing to throw on every activity.
+        if (isQuotaError(err)) throw new OutOfSpace();
+        throw err;
+      }
       stored += buffer.length;
       buffer.length = 0;
     };
@@ -462,6 +473,17 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
             `large history. Come back tomorrow and it will pick up where it stopped.`,
         });
       }
+      if (err instanceof OutOfSpace) {
+        opts.onBatch?.(stored);
+        return progress({
+          phase: 'out-of-space',
+          remaining: pending.length - done,
+          message:
+            `This browser is out of storage after ${stored.toLocaleString()} activities. ` +
+            `Everything downloaded so far is safe and your map is built from all of it. To go ` +
+            `further, free up disk space, or use a browser with more room.`,
+        });
+      }
       if (err instanceof Stopped) {
         opts.onBatch?.(stored);
         return progress({ phase: 'stopped', remaining: pending.length - done, message: 'Stopped' });
@@ -475,6 +497,9 @@ export async function runSync(opts: SyncOptions): Promise<SyncProgress> {
     return progress({ phase: 'done', remaining: 0, current: null, message: 'Sync complete' });
   } catch (err) {
     if (err instanceof Stopped) return progress({ phase: 'stopped', message: 'Stopped' });
+    if (err instanceof OutOfSpace) {
+      return progress({ phase: 'out-of-space', message: 'This browser is out of storage.' });
+    }
     return progress({
       phase: 'error',
       message: err instanceof Error ? err.message : String(err),

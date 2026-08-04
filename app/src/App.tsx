@@ -10,6 +10,7 @@ import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { SitePopup } from './panels/SitePopup.js';
 import { AccountPanel } from './panels/AccountPanel.js';
 import { ImportReport } from './panels/ImportReport.js';
+import { SmallScreen } from './panels/SmallScreen.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
@@ -354,6 +355,7 @@ export function App() {
 
   return (
     <>
+      <SmallScreen />
       <MapView
         onReady={(h) => {
           if (mapRef.current === h) return;

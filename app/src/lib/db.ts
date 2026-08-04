@@ -159,3 +159,38 @@ export async function quota(): Promise<{ usage: number; quota: number } | null> 
   const e = await navigator.storage.estimate();
   return { usage: e.usage ?? 0, quota: e.quota ?? 0 };
 }
+
+/**
+ * Ask the browser not to evict this origin's data.
+ *
+ * Must be called from a user gesture or Chrome declines without asking. Safari never grants it
+ * at all and evicts after roughly seven days without a visit, which is why the answer is
+ * returned rather than swallowed: a user whose entire history can silently disappear deserves
+ * to be told, not reassured.
+ */
+export async function requestPersistence(): Promise<boolean> {
+  if (!navigator.storage?.persist) return false;
+  try {
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the failure is the disk filling up rather than anything we did.
+ *
+ * Browsers disagree on how they say it: a DOMException named QuotaExceededError, code 22, or on
+ * older WebKit a bare message. All three mean the same thing and need the same handling, so
+ * they are recognised together.
+ */
+export function isQuotaError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; code?: number; message?: string };
+  return (
+    e.name === 'QuotaExceededError' ||
+    e.code === 22 ||
+    /quota|storage.*full|exceeded/i.test(e.message ?? '')
+  );
+}

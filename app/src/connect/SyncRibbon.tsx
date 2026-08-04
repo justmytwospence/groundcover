@@ -36,7 +36,12 @@ export function SyncRibbon({
 }) {
   const [showWarnings, setShowWarnings] = useState(false);
   const p = progress;
-  const finished = p.phase === 'done' || p.phase === 'stopped' || p.phase === 'out-of-budget' || p.phase === 'error';
+  const finished =
+    p.phase === 'done' ||
+    p.phase === 'stopped' ||
+    p.phase === 'out-of-budget' ||
+    p.phase === 'out-of-space' ||
+    p.phase === 'error';
 
   let line: React.ReactNode;
   switch (p.phase) {
