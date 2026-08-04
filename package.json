@@ -13,11 +13,12 @@
     "build:ledger": "tsx scripts/build-ledger.ts",
     "stats": "tsx scripts/stats.ts",
     "dev": "npm -w app run dev",
-    "build": "npm run build:ledger && npm -w app run build",
+    "build": "npm -w app run build",
     "preview": "npm -w app run preview",
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "build:local": "npm run build:ledger && npm -w app run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

@@ -8,7 +8,6 @@ dist/
 .env
 .strava-token.json
 
-# regenerable data
+# regenerable data, and the owner's own coverage
 data/
-app/public/artifacts/
 .local/

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { ActivitySummary, Manifest } from '@um/ledger';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(ROOT, 'app', 'public', 'artifacts');
+const OUT = join(ROOT, '.local', 'artifacts');
 
 const MI = 1609.344;
 const mi = (m: number) => (m / MI).toFixed(1);

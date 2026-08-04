@@ -14,7 +14,10 @@ import { buildLedger, DEFAULT_PARAMS, sportGroupOf, type LedgerInput } from '@um
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = join(ROOT, 'data');
-const OUT = join(ROOT, 'app', 'public', 'artifacts');
+// NOT app/public: Vite copies public/ verbatim into dist/, so artifacts living there would
+// ride a production build straight onto a CDN. Keeping them outside anywhere the build looks
+// makes publishing the owner's home coordinates structurally impossible rather than a habit.
+const OUT = join(ROOT, '.local', 'artifacts');
 
 interface SummaryRecord {
   id: number;

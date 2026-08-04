@@ -18,6 +18,7 @@ import {
   type BlockRef,
   type Manifest,
 } from '@um/ledger';
+import { pickSource, type ArtifactSource } from './artifactSource.js';
 import type {
   GroupRow,
   MapMode,
@@ -95,37 +96,25 @@ function view(buf: ArrayBuffer, ref: BlockRef): Int32Array | Uint32Array | Uint1
   }
 }
 
-async function fetchBuffer(url: string, onChunk: (n: number) => void): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  if (!res.body) return res.arrayBuffer();
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-    onChunk(value.length);
-  }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const c of chunks) {
-    out.set(c, at);
-    at += c.length;
-  }
-  return out.buffer;
-}
+let source: ArtifactSource | null = null;
 
 async function init(): Promise<void> {
-  let mf: Manifest;
-  try {
-    const res = await fetch('/artifacts/manifest.json');
-    if (!res.ok) throw new Error(String(res.status));
-    mf = (await res.json()) as Manifest;
-  } catch {
-    post({ type: 'error', kind: 'no-artifacts', message: 'No artifacts found.' });
+  let loaded = 0;
+  const bump = (n: number) => {
+    loaded += n;
+    post({ type: 'progress', loaded, total: 0 });
+  };
+
+  source = await pickSource(bump);
+  if (!source) {
+    // No data yet is the ordinary first-visit state, not a failure.
+    post({ type: 'error', kind: 'no-artifacts', message: 'No history imported yet.' });
+    return;
+  }
+
+  const mf = await source.manifest();
+  if (!mf) {
+    post({ type: 'error', kind: 'no-artifacts', message: 'No history imported yet.' });
     return;
   }
 
@@ -139,16 +128,10 @@ async function init(): Promise<void> {
     return;
   }
 
-  let loaded = 0;
-  const bump = (n: number) => {
-    loaded += n;
-    post({ type: 'progress', loaded, total: 0 });
-  };
-
   const [sitesBuf, touchesBuf, actsJson] = await Promise.all([
-    fetchBuffer(`/artifacts/${mf.files.sites.path}`, bump),
-    fetchBuffer(`/artifacts/${mf.files.touches.path}`, bump),
-    fetch(`/artifacts/${mf.files.activities.path}`).then((r) => r.json() as Promise<ActivitySummary[]>),
+    source.block('sites'),
+    source.block('touches'),
+    source.activities(),
   ]);
 
   manifest = mf;
@@ -545,7 +528,8 @@ function handleSiteAt(req: {
 
 async function loadTracks(): Promise<void> {
   if (!manifest) return;
-  const buf = await fetchBuffer(`/artifacts/${manifest.files.tracks.path}`, () => {});
+  if (!source) return;
+  const buf = await source.block('tracks');
   const b = manifest.files.tracks.blocks;
   const trackOffsets = (view(buf, b.trackOffsets) as Uint32Array).slice();
   const px = (view(buf, b.px) as Int32Array).slice();
