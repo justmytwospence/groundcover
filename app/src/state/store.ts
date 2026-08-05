@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import type { ActivitySummary, Manifest } from '@um/ledger';
-import { initialTheme, type Theme } from '../lib/theme.js';
+import { initialChoice, resolveTheme, type Theme, type ThemeChoice } from '../lib/theme.js';
 import type { MapMode, QueryExtras } from '../worker/protocol.js';
 
 export type LoadState = 'loading' | 'ready' | 'no-artifacts' | 'format-mismatch' | 'failed';
@@ -17,7 +17,10 @@ export interface Stats {
 
 interface State {
   load: LoadState;
+  /** What is on screen. */
   theme: Theme;
+  /** What the user asked for; 'system' means keep following the operating system. */
+  themeChoice: ThemeChoice;
   hillshade: boolean;
   loadError: string;
   paramsWarning: string;
@@ -87,7 +90,8 @@ function readHash(): Partial<State> {
 
 export const useStore = create<State>((set, get) => ({
   load: 'loading',
-  theme: initialTheme(),
+  theme: resolveTheme(initialChoice()),
+  themeChoice: initialChoice(),
   hillshade: localStorage.getItem('um.hillshade') === '1',
   loadError: '',
   paramsWarning: '',

@@ -9,33 +9,53 @@
 
 import { useEffect } from 'react';
 import { useStore } from '../state/store.js';
-import { applyTheme, saveTheme, watchSystemTheme, type Theme } from '../lib/theme.js';
+import {
+  applyTheme,
+  resolveTheme,
+  saveChoice,
+  watchSystemTheme,
+  type ThemeChoice,
+} from '../lib/theme.js';
 
-const ICON: Record<Theme, string> = { dark: '☾', light: '☀' };
+/** Shows the state you are IN, not the one you would move to -- with three states, "next" is
+ *  ambiguous and the icon stops being a label. */
+const ICON: Record<ThemeChoice, string> = { system: '◐', light: '☀', dark: '☾' };
+const NEXT: Record<ThemeChoice, ThemeChoice> = { system: 'light', light: 'dark', dark: 'system' };
+const LABEL: Record<ThemeChoice, string> = {
+  system: 'following your system',
+  light: 'light',
+  dark: 'dark',
+};
 
 export function ThemeToggle({ floating = false }: { floating?: boolean } = {}) {
   const theme = useStore((s) => s.theme);
+  const choice = useStore((s) => s.themeChoice);
   const set = useStore((s) => s.set);
 
   // Applied here rather than at module load so it stays in step with the store, which is the
   // single source of truth the worker also reads its palette selection from.
   useEffect(() => applyTheme(theme), [theme]);
 
-  useEffect(() => watchSystemTheme((t) => set({ theme: t })), [set]);
+  // Only meaningful while the choice is "system"; the guard lives here because only the store
+  // knows that, and reading localStorage from the watcher would duplicate the decision.
+  useEffect(
+    () => watchSystemTheme((t) => { if (useStore.getState().themeChoice === 'system') set({ theme: t }); }),
+    [set],
+  );
 
-  const next: Theme = theme === 'dark' ? 'light' : 'dark';
+  const next = NEXT[choice];
 
   return (
     <button
       className={`ghost theme-toggle${floating ? ' theme-toggle-floating' : ''}`}
       onClick={() => {
-        saveTheme(next);
-        set({ theme: next });
+        saveChoice(next);
+        set({ themeChoice: next, theme: resolveTheme(next) });
       }}
-      title={`Switch to ${next} mode`}
-      aria-label={`Switch to ${next} mode`}
+      title={`Theme: ${LABEL[choice]} — click for ${LABEL[next]}`}
+      aria-label={`Theme: ${LABEL[choice]}. Click for ${LABEL[next]}.`}
     >
-      <span aria-hidden>{ICON[next]}</span>
+      <span aria-hidden>{ICON[choice]}</span>
     </button>
   );
 }

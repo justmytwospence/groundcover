@@ -13,6 +13,15 @@
 
 export type Theme = 'dark' | 'light';
 
+/**
+ * What the user asked for, as distinct from what is currently on screen.
+ *
+ * "system" is a real state rather than merely the absence of a choice. Without it, the first
+ * click on the toggle silently pinned the theme forever -- following the operating system was
+ * the default but there was no way back to it.
+ */
+export type ThemeChoice = 'system' | Theme;
+
 const KEY = 'um.theme';
 
 /** RGB triples the map worker paints with, parallel to the CSS custom properties. */
@@ -55,20 +64,24 @@ export const BASEMAP_STYLE: Record<Theme, string> = {
   light: 'https://tiles.openfreemap.org/styles/positron',
 };
 
-function systemPreference(): Theme {
+export function systemTheme(): Theme {
   return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 /**
- * The theme to start in: an explicit past choice, else whatever the operating system asks for.
+ * The choice to start from: an explicit past one, else follow the system.
  *
  * Deliberately NOT carried in the URL hash. The hash is for what you are looking at -- window,
  * filters, time range -- and a shared link should show the recipient their own preferred
  * surface, not impose the sender's.
  */
-export function initialTheme(): Theme {
+export function initialChoice(): ThemeChoice {
   const saved = localStorage.getItem(KEY);
-  return saved === 'light' || saved === 'dark' ? saved : systemPreference();
+  return saved === 'light' || saved === 'dark' ? saved : 'system';
+}
+
+export function resolveTheme(choice: ThemeChoice): Theme {
+  return choice === 'system' ? systemTheme() : choice;
 }
 
 export function applyTheme(theme: Theme): void {
@@ -77,23 +90,21 @@ export function applyTheme(theme: Theme): void {
   document.documentElement.style.colorScheme = theme;
 }
 
-export function saveTheme(theme: Theme): void {
-  localStorage.setItem(KEY, theme);
+/** Storing nothing is how "follow the system" is represented, so choosing it clears the key. */
+export function saveChoice(choice: ThemeChoice): void {
+  if (choice === 'system') localStorage.removeItem(KEY);
+  else localStorage.setItem(KEY, choice);
 }
 
 /**
- * Follow the system while the user has expressed no preference of their own.
- *
- * Someone whose machine flips to dark at sunset expects this to follow; someone who has
- * explicitly chosen expects to be left alone. Returns an unsubscribe.
+ * Report system changes. The caller decides whether they matter, because only it knows whether
+ * the current choice is "system" -- a machine that flips to dark at sunset should carry the page
+ * with it, but someone who explicitly picked light should be left alone.
  */
 export function watchSystemTheme(onChange: (t: Theme) => void): () => void {
   const mq = window.matchMedia?.('(prefers-color-scheme: light)');
   if (!mq) return () => {};
-  const handler = () => {
-    if (localStorage.getItem(KEY)) return;
-    onChange(mq.matches ? 'light' : 'dark');
-  };
+  const handler = () => onChange(mq.matches ? 'light' : 'dark');
   mq.addEventListener('change', handler);
   return () => mq.removeEventListener('change', handler);
 }
