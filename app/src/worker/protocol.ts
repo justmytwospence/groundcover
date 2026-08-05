@@ -18,6 +18,8 @@ export interface QueryRequest {
   playing?: boolean;
   /** Reveal from the playhead forwards in time rather than backwards, for a newest-first run. */
   reverse?: boolean;
+  /** Pin the ramp to this instead of rescaling, so a replay does not repaint what it drew. */
+  scaleMax?: number;
   type: 'query';
   /** Inclusive on both ends, UTC activity start timestamps. */
   t0: number;

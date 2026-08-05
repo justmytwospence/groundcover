@@ -118,3 +118,80 @@ export function cueAt(
   const done = reverse ? (r.to - playhead) / dur : (playhead - r.from) / dur;
   return { i, t: Math.min(0.999, Math.max(0, done)) };
 }
+
+export interface Cue {
+  /** Index into the ordered reel. */
+  i: number;
+  /** How far through that route, 0 to 1. */
+  t: number;
+}
+
+export interface Step {
+  cue: Cue;
+  playhead: number;
+  done: boolean;
+}
+
+/**
+ * Advance the replay by `dt` wall-clock seconds.
+ *
+ * Pure, because it decides the order a viewer sees their history in, and "is this sequence
+ * monotone" is a question worth answering with a test rather than by reading a render loop.
+ *
+ * @param order  the reel, already in the direction of travel
+ * @param cue    where the replay currently is
+ * @param dt     wall seconds, already scaled by the speed multiplier
+ * @param drawS  wall seconds one route takes to draw
+ * @param gapS   wall seconds to cross the gap after the current route
+ * @param reverse whether the reel is being walked newest-first
+ */
+export function stepReplay(
+  order: readonly Route[],
+  cue: Cue,
+  dt: number,
+  drawS: number,
+  gapS: number,
+  reverse: boolean,
+): Step {
+  const route = order[cue.i];
+  if (!route) return { cue, playhead: 0, done: true };
+
+  const t = cue.t + dt / Math.max(drawS, 1e-6);
+  const span = route.to - route.from;
+
+  if (t < 1) {
+    const head = reverse ? route.to - span * t : route.from + span * t;
+    return { cue: { i: cue.i, t }, playhead: head, done: false };
+  }
+
+  const nextI = cue.i + 1;
+  if (nextI >= order.length) {
+    // Finish ON the last route's far edge rather than wherever the overshoot landed, so the
+    // final frame is the whole route and not a fraction past it.
+    return { cue, playhead: reverse ? route.from : route.to, done: true };
+  }
+
+  const next = order[nextI];
+  const over = (t - 1) * drawS;
+  if (over < gapS) {
+    // Still crossing the gap. The cue stays put; only the playhead moves, through empty ground.
+    const gap = reverse ? route.from - next.to : next.from - route.to;
+    const frac = over / Math.max(gapS, 1e-6);
+    return {
+      cue: { i: cue.i, t },
+      playhead: reverse ? route.from - gap * frac : route.to + gap * frac,
+      done: false,
+    };
+  }
+
+  // On to the next route, carrying the overshoot so the pace does not stutter at the seam. The
+  // playhead must agree with the carried fraction, or a re-derived cue would disagree with it
+  // and the replay would jump.
+  const carried = Math.min(0.999, (over - gapS) / Math.max(drawS, 1e-6));
+  const nextSpan = next.to - next.from;
+  return {
+    cue: { i: nextI, t: carried },
+    playhead: reverse ? next.to - nextSpan * carried : next.from + nextSpan * carried,
+    done: false,
+  };
+}

@@ -60,6 +60,10 @@ interface State {
   speed: number;
   /** Compress empty stretches so the replay spends its time where something happened. */
   skipEmptyDays: boolean;
+  /** Skip activities that fall entirely outside the map view, so the replay stays on screen. */
+  skipOutsideBounds: boolean;
+  /** The map's visible extent in degrees, kept here so the transport can consult it. */
+  viewBounds: [number, number, number, number] | null;
   /**
    * Run the replay newest-first, which is the order a Strava sync actually delivers history in.
    *
@@ -107,6 +111,7 @@ function readHash(): Partial<State> {
   if (h.get('fit') === '1') out.fitToSelection = true;
   if (h.get('fitplay') === '1') out.fitWhilePlaying = true;
   if (h.get('noskip') === '1') out.skipEmptyDays = false;
+  if (h.get('inview') === '1') out.skipOutsideBounds = true;
   const u = h.get('u');
   if (u === 'mi' || u === 'km') out.units = u;
   if (h.get('d') === '1') out.drawerOpen = true;
@@ -141,6 +146,8 @@ export const useStore = create<State>((set, get) => ({
   playhead: null,
   speed: 1,
   skipEmptyDays: true,
+  skipOutsideBounds: false,
+  viewBounds: null,
   replayReverse: false,
   actSpans: null,
   maxVisit: 1,
@@ -180,6 +187,7 @@ export function hydrateFromHash(minTs: number, maxTs: number): void {
     fitToSelection: fromHash.fitToSelection ?? s.fitToSelection,
     fitWhilePlaying: fromHash.fitWhilePlaying ?? s.fitWhilePlaying,
     skipEmptyDays: fromHash.skipEmptyDays ?? s.skipEmptyDays,
+    skipOutsideBounds: fromHash.skipOutsideBounds ?? s.skipOutsideBounds,
     units: fromHash.units ?? s.units,
     drawerOpen: fromHash.drawerOpen ?? s.drawerOpen,
   });
@@ -199,6 +207,7 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
     if (s.fitToSelection) h.set('fit', '1');
     if (s.fitWhilePlaying) h.set('fitplay', '1');
     if (!s.skipEmptyDays) h.set('noskip', '1');
+    if (s.skipOutsideBounds) h.set('inview', '1');
     h.set('u', s.units);
     if (s.drawerOpen) h.set('d', '1');
     const mp = getMapState();

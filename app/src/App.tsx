@@ -192,6 +192,21 @@ export function App() {
     return () => w.terminate();
   }, [reloadKey]);
 
+  /**
+   * The map's extent in degrees, for the transport to compare activity bounding boxes against.
+   * Published on load as well as on every move, or "skip out of view" would do nothing until
+   * the first pan.
+   */
+  const publishViewBounds = useCallback(() => {
+    const vp = mapRef.current?.getViewport();
+    if (!vp) return;
+    const lngs = [xToLng(vp.minX / 100), xToLng(vp.maxX / 100)];
+    const lats = [yToLat(vp.minY / 100), yToLat(vp.maxY / 100)];
+    useStore.setState({
+      viewBounds: [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
+    });
+  }, []);
+
   /** Hand the geometry to the map once both sides are ready, whichever arrives second. */
   const applyGeometry = useCallback(() => {
     const g = readyGeom.current;
@@ -221,6 +236,9 @@ export function App() {
       t0: s.replayReverse && s.playhead !== null ? s.playhead : s.t0,
       t1: s.replayReverse ? s.t1 : (s.playhead ?? s.t1),
       reverse: s.replayReverse && s.playing,
+      // Frozen at whatever the scale was when play began, so the ramp stops moving underneath
+      // the ground it has already painted.
+      scaleMax: s.playing ? s.maxVisit : undefined,
       groups: s.groups,
       viewport: s.viewportFilter ? (mapRef.current?.getViewport() ?? null) : null,
       mode: s.mode,
@@ -524,8 +542,10 @@ export function App() {
           applyGeometry();
           runQuery();
           setMapReady(true);
+          publishViewBounds();
         }}
         onViewportChange={() => {
+          publishViewBounds();
           if (useStore.getState().viewportFilter) runQuery();
         }}
         onHover={setHover}

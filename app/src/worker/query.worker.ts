@@ -498,13 +498,18 @@ function handleQuery(req: QueryRequest): void {
     }
   }
 
+  // A replay pins the scale to what it was when play began. Rescaling every frame repaints
+  // ground that was already drawn, so the map churns instead of accumulating -- which reads as
+  // the animation being wrong long before anyone works out that it is the colours moving.
+  const scale = req.scaleMax && req.scaleMax > 1 ? req.scaleMax : maxVisit;
+
   writeColors(
     colors,
     req.mode,
     req.theme ?? 'dark',
     req.playing ? (req.reverse ? req.t0 : req.t1) : req.reverse ? -Infinity : Infinity,
     req.reverse === true,
-    maxVisit,
+    scale,
   );
 
   let totalM: number | null = 0;
@@ -525,7 +530,7 @@ function handleQuery(req: QueryRequest): void {
 
   const buf = colors.buffer as ArrayBuffer;
   post(
-    { type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, maxVisit, extras },
+    { type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, maxVisit: scale, extras },
     [buf],
   );
 }

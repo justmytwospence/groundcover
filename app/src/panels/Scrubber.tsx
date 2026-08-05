@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
-import { cueAt, routeDrawSeconds, traversedSpanSeconds, PLAYBACK_SECONDS } from '../lib/playback.js';
+import {
+  cueAt,
+  routeDrawSeconds,
+  stepReplay,
+  traversedSpanSeconds,
+  PLAYBACK_SECONDS,
+} from '../lib/playback.js';
 
 const DAY = 86400;
 
@@ -22,7 +28,7 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 export function Scrubber() {
   const {
     activities, groups, t0, t1, minTs, maxTs, playing, speed, skipEmptyDays, playhead, actSpans,
-    replayReverse,
+    replayReverse, skipOutsideBounds, viewBounds,
   } = useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
@@ -115,9 +121,15 @@ export function Scrubber() {
   const reel = useMemo(() => {
     if (!actSpans) return [] as { from: number; to: number }[];
     const g = new Set(groups);
+    const vb = skipOutsideBounds ? viewBounds : null;
     const out: { from: number; to: number }[] = [];
     for (const a of activities) {
       if (!g.has(a.group)) continue;
+      // Dropped when its bounding box misses the map entirely: dwelling on a ride in another
+      // state, drawing off-screen, is indistinguishable from the replay having stalled.
+      if (vb && (a.bbox[2] < vb[0] || a.bbox[0] > vb[2] || a.bbox[3] < vb[1] || a.bbox[1] > vb[3])) {
+        continue;
+      }
       const from = actSpans[2 * a.idx];
       const to = actSpans[2 * a.idx + 1];
       if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
@@ -125,7 +137,7 @@ export function Scrubber() {
     }
     out.sort((x, y) => x.from - y.from);
     return out;
-  }, [activities, groups, actSpans]);
+  }, [activities, groups, actSpans, skipOutsideBounds, viewBounds]);
 
   /** Start times only, for the histogram-independent pacing maths. */
   const starts = useMemo(() => reel.map((r) => r.from), [reel]);
@@ -170,6 +182,12 @@ export function Scrubber() {
     // its end to its start -- so time runs backwards throughout rather than only between routes.
     const order = replayReverse ? [...inWindow].reverse() : inWindow;
     cue.current = cueAt(order, useStore.getState().playhead, replayReverse);
+    if (useStore.getState().playhead === null) {
+      // Otherwise the query runs once with no playhead, which means "show the whole selection",
+      // and the map flashes complete before collapsing back to the first route.
+      const first = order[cue.current.i];
+      set({ playhead: replayReverse ? first.to : first.from });
+    }
 
     let raf = 0;
     let last = performance.now();
@@ -179,41 +197,22 @@ export function Scrubber() {
       const c = cue.current;
       if (!c) return;
 
-      const route = order[c.i];
-      c.t += dt / drawS;
+      const gap = c.i + 1 < order.length
+        ? Math.abs(replayReverse ? order[c.i].from - order[c.i + 1].to : order[c.i + 1].from - order[c.i].to)
+        : 0;
+      const gapS = skipEmptyDays ? 0 : (gap / gapSpan) * gapBudget;
 
-      if (c.t < 1) {
-        // Mid-route: crawl across its own span so the line grows.
-        const head = replayReverse
-          ? route.to - (route.to - route.from) * c.t
-          : route.from + (route.to - route.from) * c.t;
-        set({ playhead: head });
-        raf = requestAnimationFrame(tick);
-        return;
-      }
-
-      // Route finished. Move to the next one, crossing the gap as fast as asked.
-      const nextI = c.i + 1;
-      if (nextI >= order.length) {
+      const s = stepReplay(order, c, dt, drawS, gapS, replayReverse);
+      cue.current = s.cue;
+      if (s.done) {
         set({ playhead: null, playing: false });
         cue.current = null;
         return;
       }
-      const gap = replayReverse
-        ? Math.max(0, route.from - order[nextI].to)
-        : Math.max(0, order[nextI].from - route.to);
-      const gapSeconds = skipEmptyDays ? 0 : (gap / gapSpan) * gapBudget;
-      const over = (c.t - 1) * drawS;
-      if (over >= gapSeconds) {
-        cue.current = { i: nextI, t: Math.min(0.999, (over - gapSeconds) / drawS) };
-        set({ playhead: replayReverse ? order[nextI].to : order[nextI].from });
-      } else {
-        // Still crossing the gap: hold the cue and show the ground between.
-        const frac = over / Math.max(gapSeconds, 1e-6);
-        set({ playhead: replayReverse ? route.from - gap * frac : route.to + gap * frac });
-      }
+      set({ playhead: s.playhead });
       raf = requestAnimationFrame(tick);
     };
+
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [playing, speed, set, t0, t1, reel, starts, skipEmptyDays, replayReverse]);
@@ -262,6 +261,18 @@ export function Scrubber() {
             onChange={(e) => set({ skipEmptyDays: e.target.checked })}
           />
           <span>Skip empty days</span>
+        </label>
+        <label
+          className="check"
+          style={{ margin: 0 }}
+          title="Pass over activities that fall entirely outside the map view"
+        >
+          <input
+            type="checkbox"
+            checked={skipOutsideBounds}
+            onChange={(e) => set({ skipOutsideBounds: e.target.checked })}
+          />
+          <span>Skip out of view</span>
         </label>
         <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           {fmt(t0)} — {fmt(playhead ?? t1)}
