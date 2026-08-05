@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
-import { PLAYBACK_SECONDS } from '../lib/playback.js';
+import {
+  MAX_EMPTY_GAP_S,
+  medianGapSeconds,
+  PLAYBACK_SECONDS,
+  routeDrawSpanSeconds,
+  traversedSpanSeconds,
+} from '../lib/playback.js';
 
 const DAY = 86400;
 
@@ -20,7 +26,8 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 }
 
 export function Scrubber() {
-  const { activities, groups, t0, t1, minTs, maxTs, playing, speed, windowMode } = useStore();
+  const { activities, groups, t0, t1, minTs, maxTs, playing, speed, windowMode, skipEmptyDays } =
+    useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -123,6 +130,15 @@ export function Scrubber() {
     if (!la || la.t0 !== t0 || la.t1 !== t1) playRange.current = null;
   }, [t0, t1, playing]);
 
+  /** Start times of the activities actually on screen, ascending. */
+  const starts = useMemo(() => {
+    const g = new Set(groups);
+    return activities
+      .filter((a) => g.has(a.group))
+      .map((a) => a.startTs)
+      .sort((x, y) => x - y);
+  }, [activities, groups]);
+
   // Playback. The rate is normalised so the selected span plays in about PLAYBACK_SECONDS at 1x
   // whether it covers one month or ten years, pro-rated by elapsed wall clock so it is
   // independent of frame rate.
@@ -151,7 +167,11 @@ export function Scrubber() {
     }
 
     const range = playRange.current;
-    const span = Math.max(DAY, range.to - range.from);
+    // The span the sweep will actually cross, which is shorter than the range when empty
+    // stretches are being compressed. Pacing against this is what keeps the run the same
+    // length either way, spending the time where something happened.
+    const span = Math.max(DAY, traversedSpanSeconds(range.from, range.to, starts, skipEmptyDays));
+    set({ drawSpanS: routeDrawSpanSeconds(span, speed, medianGapSeconds(starts)) });
 
     let raf = 0;
     let last = performance.now();
@@ -161,7 +181,15 @@ export function Scrubber() {
       const advance = dt * speed * (span / PLAYBACK_SECONDS);
       const s = useStore.getState();
       if (s.windowMode === 'expanding') {
-        const next = s.t1 + advance;
+        let next = s.t1 + advance;
+        if (skipEmptyDays) {
+          // Nothing between here and the next activity, and further away than we are willing to
+          // traverse: jump to just short of it rather than sweeping empty ground.
+          const upcoming = starts.find((x) => x > s.t1);
+          if (upcoming !== undefined && upcoming - MAX_EMPTY_GAP_S > next) {
+            next = upcoming - MAX_EMPTY_GAP_S;
+          }
+        }
         if (next >= range.to) {
           lastAnimated.current = { t0: range.from, t1: range.to };
           set({ t1: range.to, playing: false });
@@ -186,7 +214,7 @@ export function Scrubber() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, set, minTs, maxTs]);
+  }, [playing, speed, set, minTs, maxTs, starts, skipEmptyDays]);
 
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 
@@ -215,6 +243,14 @@ export function Scrubber() {
           <option value="expanding">Expanding</option>
           <option value="sliding">Sliding</option>
         </select>
+        <label className="check" style={{ margin: 0 }} title="Compress stretches with no activities">
+          <input
+            type="checkbox"
+            checked={skipEmptyDays}
+            onChange={(e) => set({ skipEmptyDays: e.target.checked })}
+          />
+          <span>Skip empty days</span>
+        </label>
         <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           {fmt(t0)} — {fmt(t1)}
         </span>

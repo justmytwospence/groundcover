@@ -52,6 +52,10 @@ interface State {
   playing: boolean;
   speed: number;
   windowMode: WindowMode;
+  /** Compress empty stretches so the replay spends its time where something happened. */
+  skipEmptyDays: boolean;
+  /** Timeline seconds one route's draw covers, published by the transport for the renderer. */
+  drawSpanS: number;
   activeActivity: number | null;
 
   stats: Stats;
@@ -82,6 +86,7 @@ function readHash(): Partial<State> {
   if (h.get('vp') === '1') out.viewportFilter = true;
   if (h.get('fit') === '1') out.fitToSelection = true;
   if (h.get('fitplay') === '1') out.fitWhilePlaying = true;
+  if (h.get('noskip') === '1') out.skipEmptyDays = false;
   const u = h.get('u');
   if (u === 'mi' || u === 'km') out.units = u;
   if (h.get('d') === '1') out.drawerOpen = true;
@@ -115,6 +120,8 @@ export const useStore = create<State>((set, get) => ({
   playing: false,
   speed: 1,
   windowMode: 'expanding',
+  skipEmptyDays: true,
+  drawSpanS: 0,
   activeActivity: null,
 
   stats: { distinctM: 0, newM: 0, totalM: 0, activityCount: 0 },
@@ -149,6 +156,7 @@ export function hydrateFromHash(minTs: number, maxTs: number): void {
     viewportFilter: fromHash.viewportFilter ?? s.viewportFilter,
     fitToSelection: fromHash.fitToSelection ?? s.fitToSelection,
     fitWhilePlaying: fromHash.fitWhilePlaying ?? s.fitWhilePlaying,
+    skipEmptyDays: fromHash.skipEmptyDays ?? s.skipEmptyDays,
     units: fromHash.units ?? s.units,
     drawerOpen: fromHash.drawerOpen ?? s.drawerOpen,
   });
@@ -167,6 +175,7 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
     if (s.viewportFilter) h.set('vp', '1');
     if (s.fitToSelection) h.set('fit', '1');
     if (s.fitWhilePlaying) h.set('fitplay', '1');
+    if (!s.skipEmptyDays) h.set('noskip', '1');
     h.set('u', s.units);
     if (s.drawerOpen) h.set('d', '1');
     const mp = getMapState();
