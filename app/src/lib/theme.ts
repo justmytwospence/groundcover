@@ -28,6 +28,23 @@ const KEY = 'um.theme';
 export interface Palette {
   exploration: string[];
   heatmap: string[];
+  /** Reserved accent for ground covered exactly once. */
+  frontier: string;
+  /**
+   * Continuous ramp for repeat visits, sampled rather than banded, and rescaled each query to
+   * whatever the busiest visible ground actually is.
+   *
+   * Ends validated against their own surface: monotone lightness, a single hue (3 degrees on
+   * dark, 5 on light), and the pale end clearing 3:1 -- 3.06:1 dark, 3.40:1 light. The
+   * adjacent-lightness-gap rule is deliberately not applied: it exists so discrete bands stay
+   * telling apart, and a gradient has no bands to tell apart.
+   *
+   * The frontier stays a separate reserved colour rather than becoming the ramp's first stop.
+   * A gold-to-blue ramp cannot be monotone in lightness on a dark surface -- gold sits near the
+   * top of the blue range, so hue and magnitude end up fighting -- and a ramp you cannot read
+   * by brightness is not a ramp.
+   */
+  gradient: string[];
 }
 
 /**
@@ -39,10 +56,14 @@ export const PALETTES: Record<Theme, Palette> = {
   dark: {
     exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'],
     heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
+    frontier: '#eda100',
+    gradient: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
   },
   light: {
     exploration: ['#c07a00', '#4a86cf', '#245f9e', '#0f3557', '#0f3557'],
     heatmap: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'],
+    frontier: '#c07a00',
+    gradient: ['#4a86cf', '#3d78bd', '#2f6aa8', '#245f9e', '#164679', '#0f3557'],
   },
 };
 

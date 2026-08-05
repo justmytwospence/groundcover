@@ -644,8 +644,20 @@ Rules that follow from this and must be honored:
 - On a dark surface, brighter means more. Higher visit counts get brighter steps, so
   well-worn ground reads as glowing and the frontier reads as a distinct color rather than
   a distinct brightness.
-- Legend is always present. Color never carries meaning alone: the legend labels the bands,
-  and hover reports exact counts.
+- Legend is always present. Color never carries meaning alone: the legend shows the ramp and
+  its ends, and hover reports exact counts.
+- **The repeat ramp is continuous and rescaled per query**, not banded. Fixed bands ("5-9") say
+  nothing about anybody's history, and a fixed scale wastes most of the ramp on a window whose
+  repeats never exceed three. It is scaled to the 98th percentile of visible counts rather than
+  the maximum: one much-loved doorstep reaching a hundred visits would otherwise squeeze the
+  whole history into the first slice. The top of the scale therefore reads "at least this many".
+- **The frontier stays a reserved colour rather than the ramp's first stop.** A gold-to-blue ramp
+  cannot be monotone in lightness on a dark surface -- gold sits at L 0.76, near the top of the
+  blue range, so hue and magnitude fight -- and a ramp that cannot be read by brightness is not
+  a ramp. Validated: the continuous ends are monotone, single-hue (3 degrees dark, 5 light), and
+  clear 3:1 against their surface (3.06:1 dark, 3.40:1 light). The adjacent-lightness-gap rule
+  is deliberately not applied, since it exists to keep discrete bands apart and a gradient has
+  none.
 - Text wears text tokens, never a data color.
 
 ### 6.3 Map layers

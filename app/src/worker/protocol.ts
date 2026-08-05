@@ -16,6 +16,8 @@ export interface QueryRequest {
   theme?: 'dark' | 'light';
   /** True while the time-lapse is running, which turns on progressive route reveal. */
   playing?: boolean;
+  /** Reveal from the playhead forwards in time rather than backwards, for a newest-first run. */
+  reverse?: boolean;
   type: 'query';
   /** Inclusive on both ends, UTC activity start timestamps. */
   t0: number;
@@ -58,6 +60,8 @@ export interface QueryResult {
    *  a meaningless ratio, so the stats card hides it rather than inventing one. */
   totalM: number | null;
   activityCount: number;
+  /** Busiest visible ground, which the legend's gradient is labelled against. */
+  maxVisit: number;
   extras?: QueryExtras;
 }
 

@@ -42,31 +42,35 @@ const hex = (h: string): [number, number, number] => [
   parseInt(h.slice(5, 7), 16),
 ];
 
-// Two selected palettes, not one palette and an inversion. On a dark surface brighter means
-// more, so the repeat ramp climbs toward white; on a light surface it must descend toward navy
-// or the encoding reads backwards. Both were validated against their own surface -- see
-// app/src/lib/theme.ts and SPEC.md section 6.2.
-const RAMPS = {
+/** Continuous ramps, kept in sync with app/src/lib/theme.ts. */
+/** Sample a ramp of stops at t in [0,1], interpolating between neighbours. */
+function sampleRamp(stops: [number, number, number][], t: number): [number, number, number] {
+  if (stops.length === 1) return stops[0];
+  const x = Math.min(1, Math.max(0, t)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  // Linear in sRGB is safe only because every stop shares a hue; across hues it would pass
+  // through mud, which is the other reason the frontier is not part of this ramp.
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+const GRADIENT = {
   dark: {
-    exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'].map(hex),
-    heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'].map(hex),
+    frontier: hex('#eda100'),
+    repeat: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'].map(hex),
+    heat: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'].map(hex),
   },
   light: {
-    exploration: ['#c07a00', '#4a86cf', '#245f9e', '#0f3557', '#0f3557'].map(hex),
-    heatmap: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'].map(hex),
+    frontier: hex('#c07a00'),
+    repeat: ['#4a86cf', '#3d78bd', '#2f6aa8', '#245f9e', '#164679', '#0f3557'].map(hex),
+    heat: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'].map(hex),
   },
 } as const;
 const EXPLORATION_ALPHA = 255;
 const HEATMAP_ALPHA = 90;
 
-/** Visit count -> band index. Both modes share the 2-4 / 5-9 breakpoints. */
-function band(v: number): number {
-  if (v <= 1) return 0;
-  if (v <= 4) return 1;
-  if (v <= 9) return 2;
-  if (v <= 24) return 3;
-  return 4;
-}
 
 // ---------------------------------------------------------------------------------------
 // State
@@ -90,6 +94,16 @@ let touchDirs: Uint8Array;
 let siteBearing: Uint8Array;
 
 let visitCount: Uint16Array;
+/**
+ * Visit-count histogram for the visible sites, reused each query.
+ *
+ * The ramp is scaled to a high percentile rather than the maximum. One much-loved doorstep can
+ * reach a hundred-odd visits while nearly everything else sits in single figures, and scaling
+ * to that outlier squeezes the entire history into the first slice of the gradient. The last
+ * bucket is an overflow, so counts beyond it still register without a huge array.
+ */
+const HIST_BUCKETS = 1024;
+const hist = new Uint32Array(HIST_BUCKETS);
 const colorSlots: (Uint8Array | null)[] = [null, null];
 const slotFree: boolean[] = [true, true];
 
@@ -318,10 +332,28 @@ function runFold(req: QueryRequest, groupSet: Set<number>): number {
  * activity's own span and skips between them, so a plain comparison already draws the route in
  * the order it was travelled, at a pace the transport controls.
  */
-function writeColors(out: Uint8Array, mode: MapMode, theme: 'dark' | 'light', revealTs: number): void {
-  const set = RAMPS[theme] ?? RAMPS.dark;
-  const ramp = mode === 'heatmap' ? set.heatmap : set.exploration;
-  const alpha = mode === 'heatmap' ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
+/**
+ * @param maxVisit The busiest visible ground, which the ramp is rescaled to. Fixed bands wasted
+ *   most of the ramp on a window whose repeats never exceed three, and saturated it on one that
+ *   reaches forty; rescaling per query means the colours always spend their range on the data
+ *   actually on screen.
+ */
+function writeColors(
+  out: Uint8Array,
+  mode: MapMode,
+  theme: 'dark' | 'light',
+  revealTs: number,
+  reverse: boolean,
+  maxVisit: number,
+): void {
+  const g = GRADIENT[theme] ?? GRADIENT.dark;
+  const heat = mode === 'heatmap';
+  const stops = heat ? g.heat : g.repeat;
+  const alpha = heat ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
+  // Exploration reserves one visit for the frontier, so the ramp covers two upwards; the
+  // heatmap has no reserved accent and spans the whole range.
+  const lo = heat ? 1 : 2;
+  const denom = Math.max(1, maxVisit - lo);
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
     const o = 4 * i;
@@ -330,11 +362,14 @@ function writeColors(out: Uint8Array, mode: MapMode, theme: 'dark' | 'light', re
     // recorded per sample carry the activity's start instead, so every site in an activity
     // clears the gate together and playback simply behaves as it used to -- degraded, never
     // broken, and self-healing on the next rebuild.
-    if (v === 0 || siteMintTs[i] > revealTs) {
+    // Running backwards shows everything NEWER than the playhead: the map fills from the most
+    // recent history towards the oldest, which is the order a sync delivers it in.
+    if (v === 0 || (reverse ? siteMintTs[i] < revealTs : siteMintTs[i] > revealTs)) {
       out[o + 3] = 0;
       continue;
     }
-    const c = ramp[band(v)];
+    const c =
+      !heat && v <= 1 ? g.frontier : sampleRamp(stops as [number, number, number][], (v - lo) / denom);
     out[o] = c[0];
     out[o + 1] = c[1];
     out[o + 2] = c[2];
@@ -430,16 +465,47 @@ function handleQuery(req: QueryRequest): void {
   let distinctM = 0;
   let newM = 0;
   const vp = req.viewport;
+  // Tallied over the same pass that already walks every site, so scaling the ramp costs a
+  // histogram increment rather than a second scan.
+  hist.fill(0);
+  let visibleSites = 0;
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
     const visible = !vp || inViewport(i, vp);
-    if (v > 0 && visible) distinctM += siteCreditCm[i] / 100;
+    if (v > 0 && visible) {
+      distinctM += siteCreditCm[i] / 100;
+      hist[Math.min(v, HIST_BUCKETS - 1)]++;
+      visibleSites++;
+    }
     if (visible) {
       const ft = firstTsUnder(i, req.groups);
       if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
     }
   }
-  writeColors(colors, req.mode, req.theme ?? 'dark', req.playing ? req.t1 : Infinity);
+  // The 98th percentile: high enough that the ramp still reaches its top on ordinary ground,
+  // low enough that a single much-worn spot does not eat the whole scale. Anything above it
+  // clamps to the last colour, which is the honest reading -- "at least this many".
+  let maxVisit = 1;
+  {
+    const target = visibleSites * 0.98;
+    let seen = 0;
+    for (let v = 1; v < HIST_BUCKETS; v++) {
+      seen += hist[v];
+      if (seen >= target) {
+        maxVisit = v;
+        break;
+      }
+    }
+  }
+
+  writeColors(
+    colors,
+    req.mode,
+    req.theme ?? 'dark',
+    req.playing ? (req.reverse ? req.t0 : req.t1) : req.reverse ? -Infinity : Infinity,
+    req.reverse === true,
+    maxVisit,
+  );
 
   let totalM: number | null = 0;
   let activityCount = activityCountAll;
@@ -458,7 +524,10 @@ function handleQuery(req: QueryRequest): void {
   }
 
   const buf = colors.buffer as ArrayBuffer;
-  post({ type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, extras }, [buf]);
+  post(
+    { type: 'result', slot, colors: buf, distinctM, newM, totalM, activityCount, maxVisit, extras },
+    [buf],
+  );
 }
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];

@@ -61,12 +61,21 @@ interface State {
   /** Compress empty stretches so the replay spends its time where something happened. */
   skipEmptyDays: boolean;
   /**
+   * Run the replay newest-first, which is the order a Strava sync actually delivers history in.
+   *
+   * Only used while a backfill is running. Watching the map fill backwards matches what is
+   * arriving, instead of replaying from a beginning that has not downloaded yet.
+   */
+  replayReverse: boolean;
+  /**
    * First and last moment each activity minted ground, interleaved as [start, end, start, ...].
    *
    * The transport paces itself to these rather than to the calendar: that is what makes exactly
    * one route draw at a time regardless of how activities happen to be spaced.
    */
   actSpans: Float64Array | null;
+  /** Busiest visible ground in the last query, for scaling the legend. */
+  maxVisit: number;
   activeActivity: number | null;
 
   stats: Stats;
@@ -132,7 +141,9 @@ export const useStore = create<State>((set, get) => ({
   playhead: null,
   speed: 1,
   skipEmptyDays: true,
+  replayReverse: false,
   actSpans: null,
+  maxVisit: 1,
   activeActivity: null,
 
   stats: { distinctM: 0, newM: 0, totalM: 0, activityCount: 0 },

@@ -22,6 +22,7 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 export function Scrubber() {
   const {
     activities, groups, t0, t1, minTs, maxTs, playing, speed, skipEmptyDays, playhead, actSpans,
+    replayReverse,
   } = useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
@@ -165,7 +166,10 @@ export function Scrubber() {
     // front and shifts every index. A carried-over index then points at a different route and
     // the replay jumps somewhere else in time. The playhead is a timestamp and means the same
     // thing whatever the reel looks like, so it is the thing worth trusting.
-    cue.current = cueAt(inWindow, useStore.getState().playhead);
+    // Walking backwards is the same walk over a reversed reel, with each route crawled from
+    // its end to its start -- so time runs backwards throughout rather than only between routes.
+    const order = replayReverse ? [...inWindow].reverse() : inWindow;
+    cue.current = cueAt(order, useStore.getState().playhead, replayReverse);
 
     let raf = 0;
     let last = performance.now();
@@ -175,38 +179,44 @@ export function Scrubber() {
       const c = cue.current;
       if (!c) return;
 
-      const route = inWindow[c.i];
+      const route = order[c.i];
       c.t += dt / drawS;
 
       if (c.t < 1) {
         // Mid-route: crawl across its own span so the line grows.
-        set({ playhead: route.from + (route.to - route.from) * c.t });
+        const head = replayReverse
+          ? route.to - (route.to - route.from) * c.t
+          : route.from + (route.to - route.from) * c.t;
+        set({ playhead: head });
         raf = requestAnimationFrame(tick);
         return;
       }
 
       // Route finished. Move to the next one, crossing the gap as fast as asked.
       const nextI = c.i + 1;
-      if (nextI >= inWindow.length) {
+      if (nextI >= order.length) {
         set({ playhead: null, playing: false });
         cue.current = null;
         return;
       }
-      const gap = Math.max(0, inWindow[nextI].from - route.to);
+      const gap = replayReverse
+        ? Math.max(0, route.from - order[nextI].to)
+        : Math.max(0, order[nextI].from - route.to);
       const gapSeconds = skipEmptyDays ? 0 : (gap / gapSpan) * gapBudget;
       const over = (c.t - 1) * drawS;
       if (over >= gapSeconds) {
         cue.current = { i: nextI, t: Math.min(0.999, (over - gapSeconds) / drawS) };
-        set({ playhead: inWindow[nextI].from });
+        set({ playhead: replayReverse ? order[nextI].to : order[nextI].from });
       } else {
         // Still crossing the gap: hold the cue and show the ground between.
-        set({ playhead: route.to + (gap * over) / Math.max(gapSeconds, 1e-6) });
+        const frac = over / Math.max(gapSeconds, 1e-6);
+        set({ playhead: replayReverse ? route.from - gap * frac : route.to + gap * frac });
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, set, t0, t1, reel, starts, skipEmptyDays]);
+  }, [playing, speed, set, t0, t1, reel, starts, skipEmptyDays, replayReverse]);
 
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 

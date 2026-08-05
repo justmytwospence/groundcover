@@ -103,12 +103,18 @@ export interface Route {
  * every index. An index carried across that rebuild points at a different route and the replay
  * jumps somewhere else in time; a timestamp means the same thing whatever the reel looks like.
  */
-export function cueAt(reel: readonly Route[], playhead: number | null): { i: number; t: number } {
+export function cueAt(
+  reel: readonly Route[],
+  playhead: number | null,
+  reverse = false,
+): { i: number; t: number } {
   if (reel.length === 0 || playhead === null) return { i: 0, t: 0 };
   let i = 0;
-  while (i < reel.length - 1 && reel[i].to < playhead) i++;
+  if (reverse) while (i < reel.length - 1 && reel[i].from > playhead) i++;
+  else while (i < reel.length - 1 && reel[i].to < playhead) i++;
   const r = reel[i];
   const dur = r.to - r.from;
-  const t = dur > 0 ? Math.min(0.999, Math.max(0, (playhead - r.from) / dur)) : 0;
-  return { i, t };
+  if (!(dur > 0)) return { i, t: 0 };
+  const done = reverse ? (r.to - playhead) / dur : (playhead - r.from) / dur;
+  return { i, t: Math.min(0.999, Math.max(0, done)) };
 }

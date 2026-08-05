@@ -143,6 +143,7 @@ export function App() {
           w.postMessage({ type: 'release', slot: msg.slot, colors: msg.colors }, [msg.colors]);
           mapRef.current?.setColors(stableColors.current, ++colorVersion.current);
           set({
+            maxVisit: msg.maxVisit,
             stats: {
               distinctM: msg.distinctM,
               newM: msg.newM,
@@ -214,9 +215,12 @@ export function App() {
     pending.current = true;
     const req: QueryRequest = {
       type: 'query',
-      t0: s.t0,
-      // The replay position when there is one, otherwise the selection's own end.
-      t1: s.playhead ?? s.t1,
+      // Running backwards, the playhead is the window's floor and everything above it is
+      // already drawn; running forwards it is the ceiling. Either way the fold sees exactly the
+      // activities that should be on screen.
+      t0: s.replayReverse && s.playhead !== null ? s.playhead : s.t0,
+      t1: s.replayReverse ? s.t1 : (s.playhead ?? s.t1),
+      reverse: s.replayReverse && s.playing,
       groups: s.groups,
       viewport: s.viewportFilter ? (mapRef.current?.getViewport() ?? null) : null,
       mode: s.mode,
@@ -235,6 +239,7 @@ export function App() {
     store.t0,
     store.t1,
     store.playhead,
+    store.replayReverse,
     store.groups,
     store.mode,
     store.viewportFilter,
@@ -281,15 +286,15 @@ export function App() {
         previewPeak.current >= LIVE_PREVIEW_MIN_ACTIVITIES
       ) {
         previewStarted.current = true;
-        set({ t0: store.minTs, t1: store.maxTs + DAY, playing: true });
+        set({ t0: store.minTs, t1: store.maxTs + DAY, playhead: null, replayReverse: true, playing: true });
         return;
       }
 
       // A completed pass restarts, widened by whatever arrived meanwhile, so the replay lasts
       // as long as the download does. Only a run that reached the end qualifies -- a pause
       // leaves the window short of it, which is how the pause button stays honest.
-      if (previewStarted.current && !store.playing && store.t1 >= store.maxTs + DAY - 1) {
-        set({ t0: store.minTs, t1: store.maxTs + DAY, playing: true });
+      if (previewStarted.current && !store.playing) {
+        set({ t0: store.minTs, t1: store.maxTs + DAY, playhead: null, replayReverse: true, playing: true });
       }
       return;
     }
@@ -300,6 +305,8 @@ export function App() {
       // Hand the map back whole rather than leaving it frozen on whatever frame the loop was on.
       set({
         playing: false,
+        playhead: null,
+        replayReverse: false,
         t0: useStore.getState().minTs,
         t1: useStore.getState().maxTs + DAY,
       });
@@ -352,6 +359,7 @@ export function App() {
     store.t0,
     store.t1,
     store.playhead,
+    store.replayReverse,
     store.groups,
     store.activities,
     // The map can finish loading after the selection settles; without this the one chance to
