@@ -26,8 +26,9 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 }
 
 export function Scrubber() {
-  const { activities, groups, t0, t1, minTs, maxTs, playing, speed, windowMode, skipEmptyDays } =
-    useStore();
+  const {
+    activities, groups, t0, t1, minTs, maxTs, playing, speed, windowMode, skipEmptyDays, playhead,
+  } = useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -110,26 +111,6 @@ export function Scrubber() {
     };
   }, [posToTs, setWindow, t0, t1, span, minTs, maxTs]);
 
-  /**
-   * The span a running animation covers, captured the moment play begins and held until it
-   * finishes. Its presence is what separates resuming a paused animation from starting one.
-   */
-  const playRange = useRef<{ from: number; to: number; width: number } | null>(null);
-  /** The last window the animation itself wrote, so a manual change can be told apart. */
-  const lastAnimated = useRef<{ t0: number; t1: number } | null>(null);
-
-  /**
-   * Moving the brush or picking a preset while paused abandons the captured span, so the next
-   * play starts from the new selection instead of resuming an animation the user has scrubbed
-   * away from. Pausing alone must not do this, which is why it compares against the values the
-   * animation last wrote rather than simply reacting to `playing` going false.
-   */
-  useEffect(() => {
-    if (playing) return;
-    const la = lastAnimated.current;
-    if (!la || la.t0 !== t0 || la.t1 !== t1) playRange.current = null;
-  }, [t0, t1, playing]);
-
   /** Start times of the activities actually on screen, ascending. */
   const starts = useMemo(() => {
     const g = new Set(groups);
@@ -139,39 +120,24 @@ export function Scrubber() {
       .sort((x, y) => x - y);
   }, [activities, groups]);
 
-  // Playback. The rate is normalised so the selected span plays in about PLAYBACK_SECONDS at 1x
-  // whether it covers one month or ten years, pro-rated by elapsed wall clock so it is
-  // independent of frame rate.
+  /**
+   * Playback moves the playhead across the selection; the selection itself never moves.
+   *
+   * The rate is normalised so a selection plays in about PLAYBACK_SECONDS at 1x whether it
+   * covers a month or ten years, pro-rated by elapsed wall clock so it is independent of frame
+   * rate. Empty stretches are compressed when asked, which is why the pacing is measured
+   * against the span actually traversed rather than the raw one.
+   */
   useEffect(() => {
     if (!playing) return;
-    const end = maxTs + DAY;
-    const s0 = useStore.getState();
 
-    // A fresh play rewinds to the beginning of what is currently selected. Without this,
-    // pressing play on a window sitting at its end runs past it on the very first frame and
-    // stops instantly, which looks exactly like the button doing nothing.
-    if (!playRange.current) {
-      if (s0.windowMode === 'expanding') {
-        // The selection is the span: choose 2023 and you watch 2023 fill in, not 2023 onwards.
-        const from = s0.t0;
-        const to = s0.t1 >= end - 1 ? end : s0.t1;
-        playRange.current = { from, to, width: 0 };
-        set({ t0: from, t1: from });
-      } else {
-        // A sliding window has no room to move inside a selection of its own width, so the
-        // selection sets the width and the sweep covers the whole history.
-        const width = Math.max(DAY, s0.t1 - s0.t0);
-        playRange.current = { from: minTs, to: end, width };
-        set({ t0: minTs, t1: Math.min(end, minTs + width) });
-      }
-    }
-
-    const range = playRange.current;
-    // The span the sweep will actually cross, which is shorter than the range when empty
-    // stretches are being compressed. Pacing against this is what keeps the run the same
-    // length either way, spending the time where something happened.
-    const span = Math.max(DAY, traversedSpanSeconds(range.from, range.to, starts, skipEmptyDays));
+    const from = t0;
+    const to = Math.max(t0 + DAY, t1);
+    const span = Math.max(DAY, traversedSpanSeconds(from, to, starts, skipEmptyDays));
     set({ drawSpanS: routeDrawSpanSeconds(span, speed, medianGapSeconds(starts)) });
+
+    // Resuming continues from where it stopped; starting fresh begins at the selection's edge.
+    if (useStore.getState().playhead === null) set({ playhead: from });
 
     let raf = 0;
     let last = performance.now();
@@ -179,42 +145,29 @@ export function Scrubber() {
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
       const advance = dt * speed * (span / PLAYBACK_SECONDS);
-      const s = useStore.getState();
-      if (s.windowMode === 'expanding') {
-        let next = s.t1 + advance;
-        if (skipEmptyDays) {
-          // Nothing between here and the next activity, and further away than we are willing to
-          // traverse: jump to just short of it rather than sweeping empty ground.
-          const upcoming = starts.find((x) => x > s.t1);
-          if (upcoming !== undefined && upcoming - MAX_EMPTY_GAP_S > next) {
-            next = upcoming - MAX_EMPTY_GAP_S;
-          }
+      const at = useStore.getState().playhead ?? from;
+
+      let next = at + advance;
+      if (skipEmptyDays) {
+        // Nothing between here and the next activity, and further off than we are willing to
+        // traverse: jump to just short of it rather than sweeping empty ground.
+        const upcoming = starts.find((x) => x > at);
+        if (upcoming !== undefined && upcoming - MAX_EMPTY_GAP_S > next) {
+          next = upcoming - MAX_EMPTY_GAP_S;
         }
-        if (next >= range.to) {
-          lastAnimated.current = { t0: range.from, t1: range.to };
-          set({ t1: range.to, playing: false });
-          playRange.current = null;
-          return;
-        }
-        lastAnimated.current = { t0: s.t0, t1: next };
-        set({ t1: next });
-      } else {
-        const w = range.width;
-        const next = s.t0 + advance;
-        if (next + w >= range.to) {
-          lastAnimated.current = { t0: range.to - w, t1: range.to };
-          set({ t0: range.to - w, t1: range.to, playing: false });
-          playRange.current = null;
-          return;
-        }
-        lastAnimated.current = { t0: next, t1: next + w };
-        set({ t0: next, t1: next + w });
       }
+
+      if (next >= to) {
+        // Finished: drop the playhead so the map shows the selection whole again.
+        set({ playhead: null, playing: false });
+        return;
+      }
+      set({ playhead: next });
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, set, minTs, maxTs, starts, skipEmptyDays]);
+  }, [playing, speed, set, t0, t1, starts, skipEmptyDays]);
 
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 
@@ -225,9 +178,22 @@ export function Scrubber() {
           className="ghost"
           style={{ width: 34 }}
           onClick={() => set({ playing: !playing })}
-          aria-label={playing ? 'Pause' : 'Play'}
+          aria-label={playing ? 'Pause' : playhead === null ? 'Play' : 'Resume'}
+          title={playing ? 'Pause' : playhead === null ? 'Play' : 'Resume from here'}
         >
           {playing ? '❙❙' : '▶'}
+        </button>
+        {/* Distinct from play, because resuming and starting over are different intentions and
+            one button cannot express both. Disabled only when it would do nothing. */}
+        <button
+          className="ghost"
+          style={{ width: 34 }}
+          onClick={() => set({ playhead: t0, playing: true })}
+          disabled={!playing && playhead === null}
+          aria-label="Restart from the beginning of the selection"
+          title="Restart from the beginning of the selection"
+        >
+          ↺
         </button>
         {[0.5, 1, 2, 4].map((s) => (
           <button key={s} className="chip" aria-pressed={speed === s} onClick={() => set({ speed: s })}>
@@ -252,7 +218,7 @@ export function Scrubber() {
           <span>Skip empty days</span>
         </label>
         <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-          {fmt(t0)} — {fmt(t1)}
+          {fmt(t0)} — {fmt(playhead ?? t1)}
         </span>
       </div>
 
@@ -315,6 +281,25 @@ export function Scrubber() {
             dragStart.current = { x: e.clientX, t0, t1 };
           }}
         />
+        {/* Where the replay has reached. Drawn over the brush rather than replacing it, which
+            is the whole point: the selection stays exactly where it was put. */}
+        {playhead !== null && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              top: -3,
+              bottom: -3,
+              left: `calc(${pct(playhead)}% - 1px)`,
+              width: 2,
+              background: 'var(--frontier)',
+              borderRadius: 1,
+              pointerEvents: 'none',
+              boxShadow: '0 0 6px var(--frontier)',
+            }}
+          />
+        )}
+
         {(['t0', 't1'] as const).map((h) => (
           <div
             key={h}

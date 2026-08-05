@@ -50,6 +50,14 @@ interface State {
   statsOpen: boolean;
 
   playing: boolean;
+  /**
+   * Where the replay has reached, independent of the selection.
+   *
+   * Playback used to advance t1 itself, which meant pressing play destroyed the window you had
+   * chosen -- it collapsed to a line and grew back. The selection is now yours and stays put;
+   * this rides inside it. Null means "not mid-replay", and the map shows the whole selection.
+   */
+  playhead: number | null;
   speed: number;
   windowMode: WindowMode;
   /** Compress empty stretches so the replay spends its time where something happened. */
@@ -118,6 +126,7 @@ export const useStore = create<State>((set, get) => ({
   statsOpen: true,
 
   playing: false,
+  playhead: null,
   speed: 1,
   windowMode: 'expanding',
   skipEmptyDays: true,
@@ -128,7 +137,8 @@ export const useStore = create<State>((set, get) => ({
   extras: null,
 
   set: (p) => set(p),
-  setWindow: (t0, t1) => set({ t0: Math.min(t0, t1), t1: Math.max(t0, t1) }),
+  setWindow: (t0, t1) =>
+    set({ t0: Math.min(t0, t1), t1: Math.max(t0, t1), playhead: null, playing: false }),
   toggleGroup: (g) => {
     const cur = get().groups;
     const next = cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g].sort();

@@ -196,7 +196,8 @@ export function App() {
     const req: QueryRequest = {
       type: 'query',
       t0: s.t0,
-      t1: s.t1,
+      // The replay position when there is one, otherwise the selection's own end.
+      t1: s.playhead ?? s.t1,
       groups: s.groups,
       viewport: s.viewportFilter ? (mapRef.current?.getViewport() ?? null) : null,
       mode: s.mode,
@@ -217,6 +218,7 @@ export function App() {
     store.load,
     store.t0,
     store.t1,
+    store.playhead,
     store.groups,
     store.mode,
     store.viewportFilter,
@@ -295,12 +297,16 @@ export function App() {
 
     // Only act when the SELECTION changed. Re-running on every render would fight the user's
     // own panning, and keying on the map's own state would feed back on itself.
-    const key = `${Math.round(store.t0)}|${Math.round(store.t1)}|${store.groups.join(',')}`;
+    // What the map should frame: the replay's reach while it is running, the selection
+    // otherwise. Keying on the selection alone would never refit during playback now that the
+    // selection stays put, which would quietly make "also while playing" do nothing.
+    const upper = store.playhead ?? store.t1;
+    const key = `${Math.round(store.t0)}|${Math.round(upper)}|${store.groups.join(',')}`;
 
-    // Playback advances the window continuously; refitting each step makes the map lurch and
-    // hides the very thing playback exists to show. The key is still recorded while skipping,
-    // so that when playback stops the accumulated movement is not mistaken for a fresh
-    // selection and answered with one last jump.
+    // Playback advances continuously; refitting each step makes the map lurch and hides the
+    // very thing playback exists to show. The key is still recorded while skipping, so that
+    // when playback stops the accumulated movement is not mistaken for a fresh selection and
+    // answered with one last jump.
     if (store.playing && !store.fitWhilePlaying) {
       fitKey.current = key;
       return;
@@ -315,7 +321,7 @@ export function App() {
     let maxLng = -Infinity;
     let maxLat = -Infinity;
     for (const a of store.activities) {
-      if (a.startTs < store.t0 || a.startTs > store.t1 || !groupSet.has(a.group)) continue;
+      if (a.startTs < store.t0 || a.startTs > upper || !groupSet.has(a.group)) continue;
       if (a.bbox[0] < minLng) minLng = a.bbox[0];
       if (a.bbox[1] < minLat) minLat = a.bbox[1];
       if (a.bbox[2] > maxLng) maxLng = a.bbox[2];
@@ -330,6 +336,7 @@ export function App() {
     store.playing,
     store.t0,
     store.t1,
+    store.playhead,
     store.groups,
     store.activities,
     // The map can finish loading after the selection settles; without this the one chance to
