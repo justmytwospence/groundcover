@@ -11,6 +11,17 @@ import {
 } from '../lib/playback.js';
 
 const DAY = 86400;
+const WEEK = 7 * DAY;
+
+/**
+ * Floor a timestamp to the Monday that starts its week, in UTC.
+ *
+ * The epoch fell on a Thursday, so the offset lines the arithmetic up with Monday rather than
+ * with 1 January 1970.
+ */
+function weekStart(ts: number): number {
+  return Math.floor((ts + 3 * DAY) / WEEK) * WEEK - 3 * DAY;
+}
 
 
 /** Local-calendar year boundaries derived from the athlete's own start_date_local. */
@@ -48,25 +59,18 @@ export function Scrubber() {
     for (const a of activities) {
       if (!groupSet.has(a.group)) continue;
       const d = new Date(a.startDateLocal);
-      const key = Date.UTC(d.getUTCFullYear(), d.getUTCMonth()) / 1000;
+      const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+      const key = weekStart(day);
       buckets.set(key, (buckets.get(key) ?? 0) + a.distanceM);
     }
 
-    // Emit a CONTIGUOUS month series, including months with no activity. Skipping empty months
+    // Emit a CONTIGUOUS week series, including weeks with no activity. Skipping the empty ones
     // and letting flexbox space the rest evenly would put each bar at its index position while
     // the brush sits at its time position -- the two axes drift apart and the highlight stops
     // matching the window. Every bar is positioned by time below, on the brush's own scale.
-    const start = new Date(minTs * 1000);
-    const end = new Date((maxTs + DAY) * 1000);
     const rows: Array<{ ts: number; tsEnd: number; m: number }> = [];
-    for (
-      let y = start.getUTCFullYear(), mo = start.getUTCMonth();
-      Date.UTC(y, mo) <= Date.UTC(end.getUTCFullYear(), end.getUTCMonth());
-      mo === 11 ? ((y += 1), (mo = 0)) : (mo += 1)
-    ) {
-      const ts = Date.UTC(y, mo) / 1000;
-      const tsEnd = Date.UTC(mo === 11 ? y + 1 : y, mo === 11 ? 0 : mo + 1) / 1000;
-      rows.push({ ts, tsEnd, m: buckets.get(ts) ?? 0 });
+    for (let ts = weekStart(minTs); ts <= maxTs + DAY; ts += WEEK) {
+      rows.push({ ts, tsEnd: ts + WEEK, m: buckets.get(ts) ?? 0 });
     }
     const max = Math.max(1, ...rows.map((r) => r.m));
     return rows.map((r) => ({ ts: r.ts, tsEnd: r.tsEnd, h: r.m / max }));
@@ -310,6 +314,8 @@ export function Scrubber() {
                   bottom: 0,
                   left: `${left}%`,
                   width: `calc(${Math.max(0, right - left)}% - 1px)`,
+                  // A week is a few pixels wide; without a floor the separator eats the bar.
+                  minWidth: 1,
                   height: `${Math.max(2, b.h * 100)}%`,
                   background: 'var(--text-muted)',
                   opacity: selected ? 0.55 : 0.16,
