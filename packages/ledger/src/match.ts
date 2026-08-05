@@ -81,7 +81,14 @@ export class SiteTable {
     this.alive = gu8(this.alive);
   }
 
-  push(p: Sample, actIdx: number, startTs: number, sampleIdx: number): number {
+  /**
+   * `p.ts` is the sample's own absolute time, not the activity's start.
+   *
+   * Storing the activity start here gave every site in a ride the same instant, which is what
+   * made time-lapse playback pop whole routes into existence at once. Per-sample times let the
+   * renderer reveal ground in the order it was actually covered, so a route draws itself.
+   */
+  push(p: Sample, actIdx: number, sampleIdx: number): number {
     if (this.n === this.x.length) this.grow();
     const i = this.n++;
     this.x[i] = p.x;
@@ -89,7 +96,7 @@ export class SiteTable {
     this.bearing[i] = p.bearing;
     this.alt[i] = p.alt === null ? NaN : p.alt;
     this.creditM[i] = p.creditM;
-    this.mintTs[i] = startTs;
+    this.mintTs[i] = p.ts;
     this.mintAct[i] = actIdx;
     this.mintS[i] = p.s;
     this.mintSample[i] = sampleIdx;

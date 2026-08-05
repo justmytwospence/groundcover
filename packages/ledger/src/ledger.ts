@@ -256,7 +256,7 @@ function processActivity(
       labels[i] = P1_REPEAT;
     } else {
       labels[i] = P1_NEW;
-      const id = sites.push(p, actIdx, a.startTs, i);
+      const id = sites.push(p, actIdx, i);
       grid.insert(p.x, p.y, id);
       minted[i] = id;
     }

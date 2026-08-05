@@ -624,6 +624,15 @@ MapLibre's style, so `setStyle()` cannot take the coverage geometry with it.
 The theme is **not** carried in the URL hash. The hash is for what you are looking at; a shared
 link should show the recipient their own preferred surface, not impose the sender's.
 
+**Time-lapse reveals ground progressively.** `mintTs` on a site is the moment that ground was
+first covered, recorded per resampled sample rather than per activity. While playback is
+running the renderer hides sites whose `mintTs` is later than the window's end, so a route draws
+itself along its path instead of appearing whole. Outside playback the gate is off: a static
+selection means the activities in it, entire, which is what the stats count and what the
+documented window semantics say. Artifacts built before per-sample times were recorded carry the
+activity's start on every site, so they all clear the gate together and playback degrades to the
+older pop-in behaviour rather than breaking.
+
 If any of these values change, re-run the validator rather than eyeballing the result.
 
 Rules that follow from this and must be honored:
