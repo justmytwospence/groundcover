@@ -19,7 +19,6 @@ import {
   type Manifest,
 } from '@um/ledger';
 import { pickSource, type ArtifactSource } from './artifactSource.js';
-import { isRevealed } from '../lib/playback.js';
 import type {
   GroupRow,
   MapMode,
@@ -314,20 +313,15 @@ function runFold(req: QueryRequest, groupSet: Set<number>): number {
 /**
  * @param revealTs Ground first covered after this instant stays hidden. Infinity outside
  *   playback: a static selection means the activities in it, entire.
- * @param drawSpanS How much timeline one route's draw is stretched across. Zero reveals each
- *   activity at its own true pace, which at any watchable timeline speed is instantaneous.
+ *
+ * No stretching happens here any more. The transport moves the playhead slowly across each
+ * activity's own span and skips between them, so a plain comparison already draws the route in
+ * the order it was travelled, at a pace the transport controls.
  */
-function writeColors(
-  out: Uint8Array,
-  mode: MapMode,
-  theme: 'dark' | 'light',
-  revealTs: number,
-  drawSpanS: number,
-): void {
+function writeColors(out: Uint8Array, mode: MapMode, theme: 'dark' | 'light', revealTs: number): void {
   const set = RAMPS[theme] ?? RAMPS.dark;
   const ramp = mode === 'heatmap' ? set.heatmap : set.exploration;
   const alpha = mode === 'heatmap' ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
-  const stretch = drawSpanS > 0 && Number.isFinite(revealTs);
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
     const o = 4 * i;
@@ -336,20 +330,7 @@ function writeColors(
     // recorded per sample carry the activity's start instead, so every site in an activity
     // clears the gate together and playback simply behaves as it used to -- degraded, never
     // broken, and self-healing on the next rebuild.
-    let hidden = v === 0;
-    if (!hidden) {
-      const a = siteMintAct[i];
-      const inRange = a < actMintStart.length;
-      hidden = !isRevealed(
-        siteMintTs[i],
-        inRange ? actMintStart[a] : siteMintTs[i],
-        inRange ? actMintEnd[a] : siteMintTs[i],
-        revealTs,
-        stretch ? drawSpanS : 0,
-      );
-    }
-
-    if (hidden) {
+    if (v === 0 || siteMintTs[i] > revealTs) {
       out[o + 3] = 0;
       continue;
     }
@@ -458,13 +439,7 @@ function handleQuery(req: QueryRequest): void {
       if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
     }
   }
-  writeColors(
-    colors,
-    req.mode,
-    req.theme ?? 'dark',
-    req.playing ? req.t1 : Infinity,
-    req.drawSpanS ?? 0,
-  );
+  writeColors(colors, req.mode, req.theme ?? 'dark', req.playing ? req.t1 : Infinity);
 
   let totalM: number | null = 0;
   let activityCount = activityCountAll;

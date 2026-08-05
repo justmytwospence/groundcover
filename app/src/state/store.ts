@@ -6,7 +6,6 @@ import { initialChoice, resolveTheme, type Theme, type ThemeChoice } from '../li
 import type { MapMode, QueryExtras } from '../worker/protocol.js';
 
 export type LoadState = 'loading' | 'ready' | 'no-artifacts' | 'format-mismatch' | 'failed';
-export type WindowMode = 'expanding' | 'sliding';
 
 export interface Stats {
   distinctM: number;
@@ -59,11 +58,15 @@ interface State {
    */
   playhead: number | null;
   speed: number;
-  windowMode: WindowMode;
   /** Compress empty stretches so the replay spends its time where something happened. */
   skipEmptyDays: boolean;
-  /** Timeline seconds one route's draw covers, published by the transport for the renderer. */
-  drawSpanS: number;
+  /**
+   * First and last moment each activity minted ground, interleaved as [start, end, start, ...].
+   *
+   * The transport paces itself to these rather than to the calendar: that is what makes exactly
+   * one route draw at a time regardless of how activities happen to be spaced.
+   */
+  actSpans: Float64Array | null;
   activeActivity: number | null;
 
   stats: Stats;
@@ -128,9 +131,8 @@ export const useStore = create<State>((set, get) => ({
   playing: false,
   playhead: null,
   speed: 1,
-  windowMode: 'expanding',
   skipEmptyDays: true,
-  drawSpanS: 0,
+  actSpans: null,
   activeActivity: null,
 
   stats: { distinctM: 0, newM: 0, totalM: 0, activityCount: 0 },

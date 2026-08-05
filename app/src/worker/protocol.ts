@@ -16,8 +16,6 @@ export interface QueryRequest {
   theme?: 'dark' | 'light';
   /** True while the time-lapse is running, which turns on progressive route reveal. */
   playing?: boolean;
-  /** Timeline seconds each route's draw is stretched across, so it reads at a fixed rate. */
-  drawSpanS?: number;
   type: 'query';
   /** Inclusive on both ends, UTC activity start timestamps. */
   t0: number;

@@ -103,6 +103,25 @@ export function App() {
         case 'ready': {
           hydrateFromHash(msg.manifest.timeRange.minTs, msg.manifest.timeRange.maxTs);
           siteMeta.current = { mintTs: msg.siteMintTs, mintAct: msg.siteMintAct };
+          // One pass to learn each activity's minting span. The transport needs it to pace a
+          // route's draw, and this is the only place the per-site arrays are in hand.
+          {
+            const n = msg.activities.length;
+            const spans = new Float64Array(2 * n);
+            for (let i = 0; i < n; i++) {
+              spans[2 * i] = Infinity;
+              spans[2 * i + 1] = -Infinity;
+            }
+            const ts = msg.siteMintTs;
+            const act = msg.siteMintAct;
+            for (let i = 0; i < ts.length; i++) {
+              const a = act[i];
+              if (a >= n) continue;
+              if (ts[i] < spans[2 * a]) spans[2 * a] = ts[i];
+              if (ts[i] > spans[2 * a + 1]) spans[2 * a + 1] = ts[i];
+            }
+            useStore.setState({ actSpans: spans });
+          }
           set({ load: 'ready', manifest: msg.manifest, activities: msg.activities });
           const b = msg.manifest.bounds;
           readyGeom.current = {
@@ -203,11 +222,8 @@ export function App() {
       mode: s.mode,
       theme: s.theme,
       playing: s.playing,
-      // Published by the transport, which is the only thing that knows how much timeline the
-      // sweep will actually cross once empty stretches are compressed.
-      drawSpanS: s.playing ? s.drawSpanS : 0,
       drawer: s.drawerOpen,
-      incremental: s.playing && s.windowMode === 'expanding',
+      incremental: s.playing,
     };
     w.postMessage(req);
   }, []);
@@ -228,7 +244,6 @@ export function App() {
     store.theme,
     store.playing,
     store.speed,
-    store.drawSpanS,
     runQuery,
   ]);
 

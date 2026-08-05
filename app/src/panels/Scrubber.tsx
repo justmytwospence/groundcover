@@ -2,13 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
-import {
-  MAX_EMPTY_GAP_S,
-  medianGapSeconds,
-  PLAYBACK_SECONDS,
-  routeDrawSpanSeconds,
-  traversedSpanSeconds,
-} from '../lib/playback.js';
+import { routeDrawSeconds, traversedSpanSeconds, PLAYBACK_SECONDS } from '../lib/playback.js';
 
 const DAY = 86400;
 
@@ -27,7 +21,7 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 
 export function Scrubber() {
   const {
-    activities, groups, t0, t1, minTs, maxTs, playing, speed, windowMode, skipEmptyDays, playhead,
+    activities, groups, t0, t1, minTs, maxTs, playing, speed, skipEmptyDays, playhead, actSpans,
   } = useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
@@ -111,69 +105,107 @@ export function Scrubber() {
     };
   }, [posToTs, setWindow, t0, t1, span, minTs, maxTs]);
 
-  /** Start times of the activities actually on screen, ascending. */
-  const starts = useMemo(() => {
+  /**
+   * The routes this replay will draw, in order, each with the span it actually covered.
+   *
+   * Activities that minted no ground -- every metre of them already covered -- are dropped:
+   * dwelling on a route that will not appear is indistinguishable from the replay having stalled.
+   */
+  const reel = useMemo(() => {
+    if (!actSpans) return [] as { from: number; to: number }[];
     const g = new Set(groups);
-    return activities
-      .filter((a) => g.has(a.group))
-      .map((a) => a.startTs)
-      .sort((x, y) => x - y);
-  }, [activities, groups]);
+    const out: { from: number; to: number }[] = [];
+    for (const a of activities) {
+      if (!g.has(a.group)) continue;
+      const from = actSpans[2 * a.idx];
+      const to = actSpans[2 * a.idx + 1];
+      if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+      out.push({ from, to });
+    }
+    out.sort((x, y) => x.from - y.from);
+    return out;
+  }, [activities, groups, actSpans]);
+
+  /** Start times only, for the histogram-independent pacing maths. */
+  const starts = useMemo(() => reel.map((r) => r.from), [reel]);
+
+  /** Where the replay is within the reel: which route, and how far through drawing it. */
+  const cue = useRef<{ i: number; t: number } | null>(null);
 
   /**
-   * Playback moves the playhead across the selection; the selection itself never moves.
+   * Playback walks the reel one route at a time; the selection itself never moves.
    *
-   * The rate is normalised so a selection plays in about PLAYBACK_SECONDS at 1x whether it
-   * covers a month or ten years, pro-rated by elapsed wall clock so it is independent of frame
-   * rate. Empty stretches are compressed when asked, which is why the pacing is measured
-   * against the span actually traversed rather than the raw one.
+   * The playhead is paced to activities rather than to the calendar, which is what makes
+   * exactly one route ever mid-draw. Inside a route it crawls across that route's own span, so
+   * the line visibly grows; between routes it crosses the gap quickly -- instantly when empty
+   * days are being skipped, which is what makes the "always exactly one" guarantee hold.
    */
   useEffect(() => {
     if (!playing) return;
 
-    const from = t0;
-    const to = Math.max(t0 + DAY, t1);
-    const span = Math.max(DAY, traversedSpanSeconds(from, to, starts, skipEmptyDays));
-    set({ drawSpanS: routeDrawSpanSeconds(span, speed, medianGapSeconds(starts)) });
+    const inWindow = reel.filter((r) => r.to >= t0 && r.from <= t1);
+    if (inWindow.length === 0) {
+      set({ playing: false, playhead: null });
+      return;
+    }
 
-    // Resuming continues from where it stopped; starting fresh begins at the selection's edge.
-    if (useStore.getState().playhead === null) set({ playhead: from });
+    const drawS = routeDrawSeconds(inWindow.length);
+    // Whatever wall-clock budget is left over after the draws pays for the gaps, so a run with
+    // skipping off still lands near PLAYBACK_SECONDS instead of running away.
+    const gapBudget = Math.max(0, PLAYBACK_SECONDS - inWindow.length * drawS);
+    const gapSpan = Math.max(
+      1,
+      traversedSpanSeconds(t0, t1, starts, false) - inWindow.reduce((n, r) => n + (r.to - r.from), 0),
+    );
+
+    // Resuming picks up where it stopped; starting fresh begins at the first route.
+    if (cue.current === null || useStore.getState().playhead === null) {
+      const at = useStore.getState().playhead;
+      let i = 0;
+      if (at !== null) while (i < inWindow.length - 1 && inWindow[i].to < at) i++;
+      cue.current = { i, t: 0 };
+    }
 
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
-      const dt = Math.min(0.25, (now - last) / 1000);
+      const dt = Math.min(0.25, (now - last) / 1000) * speed;
       last = now;
-      const advance = dt * speed * (span / PLAYBACK_SECONDS);
-      const at = useStore.getState().playhead ?? from;
+      const c = cue.current;
+      if (!c) return;
 
-      let next = at + advance;
-      if (skipEmptyDays) {
-        const upcoming = starts.find((x) => x > at);
-        if (upcoming === undefined || upcoming >= to) {
-          // Nothing left inside the selection to draw, so the tail is empty by definition.
-          // Without this the jump could land on an activity BEYOND the selection and overshoot
-          // the end, which ended the replay the instant it started -- exactly what restarting
-          // into a stretch with no activities ahead of it looked like.
-          next = to;
-        } else if (upcoming - MAX_EMPTY_GAP_S > next) {
-          // Nothing between here and the next one, and further off than we will traverse:
-          // jump to just short of it rather than sweeping empty ground.
-          next = upcoming - MAX_EMPTY_GAP_S;
-        }
-      }
+      const route = inWindow[c.i];
+      c.t += dt / drawS;
 
-      if (next >= to) {
-        // Finished: drop the playhead so the map shows the selection whole again.
-        set({ playhead: null, playing: false });
+      if (c.t < 1) {
+        // Mid-route: crawl across its own span so the line grows.
+        set({ playhead: route.from + (route.to - route.from) * c.t });
+        raf = requestAnimationFrame(tick);
         return;
       }
-      set({ playhead: next });
+
+      // Route finished. Move to the next one, crossing the gap as fast as asked.
+      const nextI = c.i + 1;
+      if (nextI >= inWindow.length) {
+        set({ playhead: null, playing: false });
+        cue.current = null;
+        return;
+      }
+      const gap = Math.max(0, inWindow[nextI].from - route.to);
+      const gapSeconds = skipEmptyDays ? 0 : (gap / gapSpan) * gapBudget;
+      const over = (c.t - 1) * drawS;
+      if (over >= gapSeconds) {
+        cue.current = { i: nextI, t: Math.min(0.999, (over - gapSeconds) / drawS) };
+        set({ playhead: inWindow[nextI].from });
+      } else {
+        // Still crossing the gap: hold the cue and show the ground between.
+        set({ playhead: route.to + (gap * over) / Math.max(gapSeconds, 1e-6) });
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, set, t0, t1, starts, skipEmptyDays]);
+  }, [playing, speed, set, t0, t1, reel, starts, skipEmptyDays]);
 
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 
@@ -197,7 +229,10 @@ export function Scrubber() {
         <button
           className="ghost"
           style={{ width: 34 }}
-          onClick={() => set({ playhead: t0, playing: false })}
+          onClick={() => {
+            cue.current = null;
+            set({ playhead: t0, playing: false });
+          }}
           disabled={!playing && (playhead === null || playhead <= t0)}
           aria-label="Back to the start of the selection"
           title="Back to the start of the selection"
@@ -209,15 +244,6 @@ export function Scrubber() {
             {s}x
           </button>
         ))}
-        <select
-          className="chip"
-          value={windowMode}
-          onChange={(e) => set({ windowMode: e.target.value as 'expanding' | 'sliding' })}
-          style={{ background: 'var(--inset-bg)', color: 'var(--text-secondary)' }}
-        >
-          <option value="expanding">Expanding</option>
-          <option value="sliding">Sliding</option>
-        </select>
         <label className="check" style={{ margin: 0 }} title="Compress stretches with no activities">
           <input
             type="checkbox"
