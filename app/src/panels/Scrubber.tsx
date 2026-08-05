@@ -149,10 +149,16 @@ export function Scrubber() {
 
       let next = at + advance;
       if (skipEmptyDays) {
-        // Nothing between here and the next activity, and further off than we are willing to
-        // traverse: jump to just short of it rather than sweeping empty ground.
         const upcoming = starts.find((x) => x > at);
-        if (upcoming !== undefined && upcoming - MAX_EMPTY_GAP_S > next) {
+        if (upcoming === undefined || upcoming >= to) {
+          // Nothing left inside the selection to draw, so the tail is empty by definition.
+          // Without this the jump could land on an activity BEYOND the selection and overshoot
+          // the end, which ended the replay the instant it started -- exactly what restarting
+          // into a stretch with no activities ahead of it looked like.
+          next = to;
+        } else if (upcoming - MAX_EMPTY_GAP_S > next) {
+          // Nothing between here and the next one, and further off than we will traverse:
+          // jump to just short of it rather than sweeping empty ground.
           next = upcoming - MAX_EMPTY_GAP_S;
         }
       }
@@ -178,20 +184,23 @@ export function Scrubber() {
           className="ghost"
           style={{ width: 34 }}
           onClick={() => set({ playing: !playing })}
-          aria-label={playing ? 'Pause' : playhead === null ? 'Play' : 'Resume'}
-          title={playing ? 'Pause' : playhead === null ? 'Play' : 'Resume from here'}
+          aria-label={playing ? 'Pause' : playhead === null || playhead <= t0 ? 'Play' : 'Resume'}
+          title={
+            playing ? 'Pause' : playhead === null || playhead <= t0 ? 'Play' : 'Resume from here'
+          }
         >
           {playing ? '❙❙' : '▶'}
         </button>
         {/* Distinct from play, because resuming and starting over are different intentions and
-            one button cannot express both. Disabled only when it would do nothing. */}
+            one button cannot express both. It stops as well as rewinds: leaving it running
+            would mean the transport reads "pause" over a map that has just gone blank. */}
         <button
           className="ghost"
           style={{ width: 34 }}
-          onClick={() => set({ playhead: t0, playing: true })}
-          disabled={!playing && playhead === null}
-          aria-label="Restart from the beginning of the selection"
-          title="Restart from the beginning of the selection"
+          onClick={() => set({ playhead: t0, playing: false })}
+          disabled={!playing && (playhead === null || playhead <= t0)}
+          aria-label="Back to the start of the selection"
+          title="Back to the start of the selection"
         >
           ↺
         </button>
