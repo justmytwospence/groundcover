@@ -18,6 +18,15 @@ import { useConnection } from './connect/useConnection.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
 import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
+/**
+ * Below this many activities still to fetch, a sync is a routine top-up and the map is left
+ * alone. Above it, the run is long enough that watching something happen is worth more than an
+ * undisturbed view.
+ */
+const LIVE_PREVIEW_MIN_ACTIVITIES = 40;
+
+const DAY = 86400;
+
 interface HoverAt {
   lng: number;
   lat: number;
@@ -62,6 +71,10 @@ export function App() {
   /** Lets an already-rendering map reach the connect flow on demand -- the local pipeline
    *  produces a "ready" map in a browser that has never connected to anything. */
   const [showConnect, setShowConnect] = useState(false);
+  /** Whether the live preview has already been started for the sync currently running. */
+  const previewStarted = useRef(false);
+  /** The most work this sync ever had left, which is what decides if it is worth previewing. */
+  const previewPeak = useRef(0);
 
   // ---- worker lifecycle ----------------------------------------------------------------
   useEffect(() => {
@@ -213,6 +226,63 @@ export function App() {
   ]);
 
   useEffect(() => startHashSync(() => mapRef.current?.getMapState() ?? null), []);
+
+  /**
+   * Replay the history on a loop while a big backfill runs.
+   *
+   * A progress bar proves the code is running; watching your own map redraw itself proves the
+   * right thing is arriving. The replay widens with each batch, so it doubles as progress.
+   *
+   * Deliberately drives the ordinary transport rather than adding a bespoke loop mode: handing
+   * it an all-time selection and setting `playing` is exactly what pressing play does, which is
+   * the path already covered by the rest of the app.
+   */
+  const syncPhase = conn.sync?.phase;
+  const syncRemaining = conn.sync?.remaining ?? 0;
+  useEffect(() => {
+    const running =
+      syncPhase === 'starting' ||
+      syncPhase === 'summaries' ||
+      syncPhase === 'streams' ||
+      syncPhase === 'waiting';
+
+    if (running) {
+      // The PEAK, not the current value. There is nothing to preview until the first rebuild
+      // makes a map exist, and by then a chunk of the queue has already been fetched -- so
+      // comparing what is left at that moment against the threshold would reject every sync
+      // whose first batch brought it under, which on a short run is all of them.
+      previewPeak.current = Math.max(previewPeak.current, syncRemaining);
+
+      if (
+        store.load === 'ready' &&
+        !previewStarted.current &&
+        previewPeak.current >= LIVE_PREVIEW_MIN_ACTIVITIES
+      ) {
+        previewStarted.current = true;
+        set({ t0: store.minTs, t1: store.maxTs + DAY, playing: true });
+        return;
+      }
+
+      // A completed pass restarts, widened by whatever arrived meanwhile, so the replay lasts
+      // as long as the download does. Only a run that reached the end qualifies -- a pause
+      // leaves the window short of it, which is how the pause button stays honest.
+      if (previewStarted.current && !store.playing && store.t1 >= store.maxTs + DAY - 1) {
+        set({ t0: store.minTs, t1: store.maxTs + DAY, playing: true });
+      }
+      return;
+    }
+
+    previewPeak.current = 0;
+    if (previewStarted.current) {
+      previewStarted.current = false;
+      // Hand the map back whole rather than leaving it frozen on whatever frame the loop was on.
+      set({
+        playing: false,
+        t0: useStore.getState().minTs,
+        t1: useStore.getState().maxTs + DAY,
+      });
+    }
+  }, [syncPhase, syncRemaining, store.load, store.playing, store.t1, store.minTs, store.maxTs, set]);
 
   // ---- fit the map to the data in the current selection ----------------------------------
   useEffect(() => {
