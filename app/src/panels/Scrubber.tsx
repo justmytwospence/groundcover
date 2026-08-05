@@ -109,22 +109,55 @@ export function Scrubber() {
     };
   }, [posToTs, setWindow, t0, t1, span, minTs, maxTs]);
 
-  // Playback. The rate is normalised so a full history plays in about PLAYBACK_SECONDS at 1x
-  // whether it spans one year or ten, pro-rated by elapsed wall clock so it is independent of
-  // frame rate.
+  /**
+   * The span a running animation covers, captured the moment play begins and held until it
+   * finishes. Its presence is what separates resuming a paused animation from starting one.
+   */
+  const playRange = useRef<{ from: number; to: number; width: number } | null>(null);
+  /** The last window the animation itself wrote, so a manual change can be told apart. */
+  const lastAnimated = useRef<{ t0: number; t1: number } | null>(null);
+
+  /**
+   * Moving the brush or picking a preset while paused abandons the captured span, so the next
+   * play starts from the new selection instead of resuming an animation the user has scrubbed
+   * away from. Pausing alone must not do this, which is why it compares against the values the
+   * animation last wrote rather than simply reacting to `playing` going false.
+   */
+  useEffect(() => {
+    if (playing) return;
+    const la = lastAnimated.current;
+    if (!la || la.t0 !== t0 || la.t1 !== t1) playRange.current = null;
+  }, [t0, t1, playing]);
+
+  // Playback. The rate is normalised so the selected span plays in about PLAYBACK_SECONDS at 1x
+  // whether it covers one month or ten years, pro-rated by elapsed wall clock so it is
+  // independent of frame rate.
   useEffect(() => {
     if (!playing) return;
     const end = maxTs + DAY;
-    const span = Math.max(DAY, end - minTs);
-
-    // Pressing play with the window already at the end -- which is the default, all-time view
-    // -- would run past the end on the very first frame and stop instantly, looking exactly
-    // like the button does nothing. Rewind and replay from the start instead.
     const s0 = useStore.getState();
-    if (s0.t1 >= end - 1) {
-      if (s0.windowMode === 'expanding') set({ t0: minTs, t1: minTs });
-      else set({ t0: minTs, t1: Math.min(end, minTs + (s0.t1 - s0.t0)) });
+
+    // A fresh play rewinds to the beginning of what is currently selected. Without this,
+    // pressing play on a window sitting at its end runs past it on the very first frame and
+    // stops instantly, which looks exactly like the button doing nothing.
+    if (!playRange.current) {
+      if (s0.windowMode === 'expanding') {
+        // The selection is the span: choose 2023 and you watch 2023 fill in, not 2023 onwards.
+        const from = s0.t0;
+        const to = s0.t1 >= end - 1 ? end : s0.t1;
+        playRange.current = { from, to, width: 0 };
+        set({ t0: from, t1: from });
+      } else {
+        // A sliding window has no room to move inside a selection of its own width, so the
+        // selection sets the width and the sweep covers the whole history.
+        const width = Math.max(DAY, s0.t1 - s0.t0);
+        playRange.current = { from: minTs, to: end, width };
+        set({ t0: minTs, t1: Math.min(end, minTs + width) });
+      }
     }
+
+    const range = playRange.current;
+    const span = Math.max(DAY, range.to - range.from);
 
     let raf = 0;
     let last = performance.now();
@@ -135,18 +168,24 @@ export function Scrubber() {
       const s = useStore.getState();
       if (s.windowMode === 'expanding') {
         const next = s.t1 + advance;
-        if (next >= end) {
-          set({ t1: end, playing: false });
+        if (next >= range.to) {
+          lastAnimated.current = { t0: range.from, t1: range.to };
+          set({ t1: range.to, playing: false });
+          playRange.current = null;
           return;
         }
+        lastAnimated.current = { t0: s.t0, t1: next };
         set({ t1: next });
       } else {
-        const w = s.t1 - s.t0;
+        const w = range.width;
         const next = s.t0 + advance;
-        if (next + w >= end) {
-          set({ t0: end - w, t1: end, playing: false });
+        if (next + w >= range.to) {
+          lastAnimated.current = { t0: range.to - w, t1: range.to };
+          set({ t0: range.to - w, t1: range.to, playing: false });
+          playRange.current = null;
           return;
         }
+        lastAnimated.current = { t0: next, t1: next + w };
         set({ t0: next, t1: next + w });
       }
       raf = requestAnimationFrame(tick);
