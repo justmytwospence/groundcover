@@ -19,6 +19,7 @@ import {
   type Manifest,
 } from '@um/ledger';
 import { pickSource, type ArtifactSource } from './artifactSource.js';
+import { isRevealed } from '../lib/playback.js';
 import type {
   GroupRow,
   MapMode,
@@ -79,6 +80,9 @@ let siteX: Int32Array;
 let siteY: Int32Array;
 let siteCreditCm: Uint16Array;
 let siteMintAct: Uint32Array;
+/** First and last moment each activity minted ground, derived once at load. */
+let actMintStart: Float64Array;
+let actMintEnd: Float64Array;
 let siteMintTs: Uint32Array;
 let firstTsByGroup: Uint32Array[] = [];
 let actOffsets: Uint32Array;
@@ -182,6 +186,18 @@ async function init(): Promise<void> {
   actOffsets = view(touchesBuf, mf.files.touches.blocks.actOffsets) as Uint32Array;
   touchSiteIds = view(touchesBuf, mf.files.touches.blocks.siteIds) as Uint32Array;
   touchDirs = view(touchesBuf, mf.files.touches.blocks.dirs) as Uint8Array;
+
+  // One pass to learn each activity's minting span, which is what lets a route be revealed
+  // over a fixed wall-clock duration instead of however long the activity happened to take.
+  actMintStart = new Float64Array(activities.length).fill(Infinity);
+  actMintEnd = new Float64Array(activities.length).fill(-Infinity);
+  for (let i = 0; i < nSites; i++) {
+    const a = siteMintAct[i];
+    if (a >= actMintStart.length) continue;
+    const ts = siteMintTs[i];
+    if (ts < actMintStart[a]) actMintStart[a] = ts;
+    if (ts > actMintEnd[a]) actMintEnd[a] = ts;
+  }
 
   visitCount = new Uint16Array(nSites);
   colorSlots[0] = new Uint8Array(4 * nSites);
@@ -295,23 +311,45 @@ function runFold(req: QueryRequest, groupSet: Set<number>): number {
  *   route draws itself along its path instead of appearing whole. Infinity outside playback:
  *   a static selection means the activities in it, entire, which is what the stats count.
  */
+/**
+ * @param revealTs Ground first covered after this instant stays hidden. Infinity outside
+ *   playback: a static selection means the activities in it, entire.
+ * @param drawSpanS How much timeline one route's draw is stretched across. Zero reveals each
+ *   activity at its own true pace, which at any watchable timeline speed is instantaneous.
+ */
 function writeColors(
   out: Uint8Array,
   mode: MapMode,
   theme: 'dark' | 'light',
   revealTs: number,
+  drawSpanS: number,
 ): void {
   const set = RAMPS[theme] ?? RAMPS.dark;
   const ramp = mode === 'heatmap' ? set.heatmap : set.exploration;
   const alpha = mode === 'heatmap' ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
+  const stretch = drawSpanS > 0 && Number.isFinite(revealTs);
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
     const o = 4 * i;
+
     // siteMintTs is the moment this ground was first covered. Artifacts built before that was
     // recorded per sample carry the activity's start instead, so every site in an activity
     // clears the gate together and playback simply behaves as it used to -- degraded, never
     // broken, and self-healing on the next rebuild.
-    if (v === 0 || siteMintTs[i] > revealTs) {
+    let hidden = v === 0;
+    if (!hidden) {
+      const a = siteMintAct[i];
+      const inRange = a < actMintStart.length;
+      hidden = !isRevealed(
+        siteMintTs[i],
+        inRange ? actMintStart[a] : siteMintTs[i],
+        inRange ? actMintEnd[a] : siteMintTs[i],
+        revealTs,
+        stretch ? drawSpanS : 0,
+      );
+    }
+
+    if (hidden) {
       out[o + 3] = 0;
       continue;
     }
@@ -420,7 +458,13 @@ function handleQuery(req: QueryRequest): void {
       if (ft !== 0xffffffff && ft >= req.t0 && ft <= req.t1) newM += siteCreditCm[i] / 100;
     }
   }
-  writeColors(colors, req.mode, req.theme ?? 'dark', req.playing ? req.t1 : Infinity);
+  writeColors(
+    colors,
+    req.mode,
+    req.theme ?? 'dark',
+    req.playing ? req.t1 : Infinity,
+    req.drawSpanS ?? 0,
+  );
 
   let totalM: number | null = 0;
   let activityCount = activityCountAll;

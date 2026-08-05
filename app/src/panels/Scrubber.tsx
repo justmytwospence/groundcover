@@ -2,16 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
+import { PLAYBACK_SECONDS } from '../lib/playback.js';
 
 const DAY = 86400;
-/** Seconds of real time to replay the whole history at 1x. */
-/**
- * Wall-clock seconds a full history takes to play at 1x.
- *
- * Every speed chip is a multiplier on this, so raising it slows the whole set at once and the
- * labels keep meaning what they say relative to each other.
- */
-const PLAYBACK_SECONDS = 180;
+
 
 /** Local-calendar year boundaries derived from the athlete's own start_date_local. */
 function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map<number, [number, number]> {

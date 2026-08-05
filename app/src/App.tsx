@@ -16,6 +16,7 @@ import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
 import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
+import { routeDrawSpanSeconds } from './lib/playback.js';
 import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
 /**
@@ -202,6 +203,11 @@ export function App() {
       mode: s.mode,
       theme: s.theme,
       playing: s.playing,
+      // Converted here rather than in the worker because the rate depends on the transport's
+      // speed multiplier, which is main-thread state.
+      drawSpanS: s.playing
+        ? routeDrawSpanSeconds(Math.max(DAY, s.maxTs + DAY - s.minTs), s.speed)
+        : 0,
       drawer: s.drawerOpen,
       incremental: s.playing && s.windowMode === 'expanding',
     };
@@ -222,6 +228,7 @@ export function App() {
     // a re-query, not a CSS repaint. Without this the map keeps the previous theme's ramp.
     store.theme,
     store.playing,
+    store.speed,
     runQuery,
   ]);
 
