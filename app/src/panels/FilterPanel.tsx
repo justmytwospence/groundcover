@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useStore } from '../state/store.js';
+import { Legend } from './Legend.js';
 
 export function FilterPanel() {
   const { manifest, activities, groups, mode, filtersOpen, hillshade } = useStore();
@@ -68,6 +69,8 @@ export function FilterPanel() {
             />
             <span>Terrain</span>
           </label>
+
+          <Legend />
         </>
       )}
     </div>

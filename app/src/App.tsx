@@ -3,7 +3,6 @@ import { xToLng, yToLat } from '@um/ledger';
 import { MapView, type MapHandles } from './map/MapView.js';
 import { FilterPanel } from './panels/FilterPanel.js';
 import { StatsCard } from './panels/StatsCard.js';
-import { Legend } from './panels/Legend.js';
 import { Scrubber } from './panels/Scrubber.js';
 import { StatsDrawer } from './panels/StatsDrawer.js';
 import { SearchBox, type Bounds } from './panels/SearchBox.js';
@@ -612,7 +611,6 @@ export function App() {
           <FilterPanel />
           <SearchBox onGo={searchGo} />
           <StatsCard />
-          <Legend />
           <Scrubber />
           {/* One stack rather than three hand-tuned `bottom:` values that drifted into each
               other and into the scrubber. Bottom-aligned to 150px, matching the legend on the

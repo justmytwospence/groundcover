@@ -4,6 +4,10 @@ import { PALETTES } from '../lib/theme.js';
 /**
  * The key to the map: a continuous ramp rather than named bands.
  *
+ * Rendered inside the filter panel rather than as its own floating box. It reads as part of the
+ * map-mode control it describes -- the ramp changes when the mode does -- and one panel fewer is
+ * one less thing occupying a corner of somebody's map.
+ *
  * The bands were arbitrary. "5-9" says nothing about anybody's history, and a fixed scale wastes
  * most of the ramp on a window whose repeats never exceed three while saturating on one that
  * reaches forty. The gradient is rescaled to the busiest ground actually on screen, so it always
@@ -29,8 +33,9 @@ export function Legend() {
   const stops = exploring ? palette.gradient : palette.heatmap;
 
   return (
-    <div className="panel" style={{ right: 12, bottom: 150, width: 168, padding: '10px 12px' }}>
-      <h2 style={{ marginBottom: 8 }}>{exploring ? 'Exploration' : 'Visits'}</h2>
+    <>
+      <hr className="rule" />
+      <h2 style={{ margin: '0 0 8px' }}>{exploring ? 'Exploration' : 'Visits'}</h2>
 
       {exploring && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
@@ -70,6 +75,6 @@ export function Legend() {
         <span>{lo === 1 ? '1 visit' : `${lo} visits`}</span>
         <span>{hi <= lo ? '' : `${hi.toLocaleString()}+`}</span>
       </div>
-    </div>
+    </>
   );
 }
