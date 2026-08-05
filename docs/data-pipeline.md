@@ -10,7 +10,7 @@ web app consumes.
 ### 1.1 Reuse the existing application
 
 Strava allows one API application per account, and the account already has one — the
-registration other tools on the same account share. unique-miles uses the same
+registration other tools on the same account share. GroundCover uses the same
 `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, copied into its own gitignored `.env.local`.
 
 Confirm the Authorization Callback Domain at <https://www.strava.com/settings/api> is
@@ -27,16 +27,16 @@ upgrade is worthwhile and harmless to existing consumers.
 
 ### 1.2 Sharing one app: the refresh-token hazard
 
-Because the registration is shared, unique-miles becomes another consumer of a credential the
+Because the registration is shared, GroundCover becomes another consumer of a credential the
 another tool depends on. `an internal design note` documents the hazard: Strava rotates the refresh
 token on every refresh, and several stores already hold copies (a server-side store under
 `a shared key`, `another store`, `another store`, and the another consumer).
 
 The rules that keep this safe, and they are not optional:
 
-- unique-miles performs its **own** OAuth authorization and holds its **own** refresh token in
+- GroundCover performs its **own** OAuth authorization and holds its **own** refresh token in
   its own `.strava-token.json`. It never reads or writes the another tool's token stores.
-- unique-miles persists every rotation immediately, so its own token never goes stale.
+- GroundCover persists every rotation immediately, so its own token never goes stale.
 - The backfill shares the app's rate-limit budget with another tool. Run large backfills when the
   another tool's sync is not running, and expect another tool to hit 429s if they overlap — both sides
   retry, so this degrades rather than breaks.
@@ -514,7 +514,7 @@ code:
 
 - Credentials live in `.env.local` and `.strava-token.json`, both gitignored. Never print
   token values.
-- unique-miles uses its **own** Strava app registration, deliberately separate from the one
+- GroundCover uses its **own** Strava app registration, deliberately separate from the one
   another tool and `another tool` share. Do not point it at the another tool's credentials; see section 1.2.
 - `npm run sync` is resumable and expected to take hours on a first backfill. Re-run it; it
   picks up where it stopped.

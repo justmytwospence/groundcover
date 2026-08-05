@@ -1,4 +1,4 @@
-# unique-miles
+# GroundCover
 
 A personal, local-first web tool that pulls one athlete's Strava history and answers a
 question no other heatmap answers: **how much distinct ground have I actually covered?**
@@ -54,7 +54,7 @@ None of them tell you how much of it was *new*. If you run the same 5-mile loop 
 a heatmap shows a bright loop and your annual total says 1,000 miles. The honest answer to
 "how much ground have you covered" is 5 miles.
 
-unique-miles computes both numbers and shows them side by side, and colors the map so the
+GroundCover computes both numbers and shows them side by side, and colors the map so the
 distinction is visible: the ground you have covered exactly once (your frontier) is
 rendered in a reserved accent color; ground you have worn in is rendered in a
 brightness ramp by how many times you have been there.
@@ -158,7 +158,7 @@ npm run dev       # serves the app at localhost:5173
 ### 3.1 Repo layout
 
 ```
-unique-miles/
+groundcover/
   SPEC.md
   CLAUDE.md                      operational notes (creds location, commands, gotchas)
   docs/
@@ -343,7 +343,7 @@ Full detail in `docs/data-pipeline.md`. The load-bearing points:
 ### 4.1 Reuse the existing Strava application
 
 Strava allows one API application per account, and the account already has one — the
-registration other tools on the same account share. unique-miles uses the same
+registration other tools on the same account share. GroundCover uses the same
 `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, copied into this project's own gitignored
 `.env.local`.
 
@@ -363,7 +363,7 @@ token on every refresh, and independent consumers holding copies of the same tok
 invalidate each other. another tool holds copies in a server-side store (`a shared key`), in `.env.local`,
 and in `.strava-token.json`; the another consumer holds another.
 
-unique-miles becomes another such consumer, so it follows the same self-healing discipline:
+GroundCover becomes another such consumer, so it follows the same self-healing discipline:
 it performs its **own** OAuth authorization, holds its **own** refresh token in its own
 `.strava-token.json`, never reads or writes the another tool's stores, and persists every rotation
 immediately. It also shares the app's rate-limit budget, so a long backfill running alongside

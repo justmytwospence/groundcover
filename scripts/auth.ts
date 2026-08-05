@@ -4,7 +4,7 @@
  *   npm run auth
  *
  * Writes .strava-token.json at the repo root, mode 0600, gitignored. Token values are never
- * printed. unique-miles holds its own refresh token and never reads or writes any other
+ * printed. GroundCover holds its own refresh token and never reads or writes any other
  * project's token store (section 1.2).
  */
 
@@ -129,7 +129,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   const url = authorizeUrl(clientId, REDIRECT_URI);
-  console.log('Open this URL to authorize unique-miles against your Strava account:\n');
+  console.log('Open this URL to authorize GroundCover against your Strava account:\n');
   console.log(`  ${url}\n`);
   console.log(`Waiting for the callback on ${REDIRECT_URI} ...`);
   openInBrowser(url);

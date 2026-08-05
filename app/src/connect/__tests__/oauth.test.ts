@@ -56,7 +56,7 @@ describe('redirectUriFor', () => {
   });
 
   it('uses https for a real host', () => {
-    expect(redirectUriFor('traversed.vercel.app')).toBe('https://traversed.vercel.app/');
+    expect(redirectUriFor('groundcover.vercel.app')).toBe('https://groundcover.vercel.app/');
   });
 });
 

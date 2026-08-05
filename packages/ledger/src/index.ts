@@ -1,5 +1,5 @@
 /**
- * @um/ledger - the unique-miles algorithm.
+ * @um/ledger - the GroundCover algorithm.
  *
  * PURE TYPESCRIPT. No node APIs, no third-party runtime dependencies, so this package runs
  * unchanged in a Node build script or a browser worker. All file I/O belongs to the caller.

@@ -1,6 +1,6 @@
 # SiteLedger v2 — the uniqueness algorithm
 
-This document fully specifies how unique-miles decides which ground is new. It is written
+This document fully specifies how GroundCover decides which ground is new. It is written
 to be implemented directly, without design decisions left to the implementer. Where a
 parameter appears, its value and its justification are both given; do not change values
 without reading the justification.

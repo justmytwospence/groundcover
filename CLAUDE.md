@@ -1,4 +1,4 @@
-# unique-miles
+# GroundCover
 
 Personal Strava heatmap that computes deduplicated ("unique") mileage. Read `SPEC.md` first,
 then `docs/build-plan.md`. This file carries only what those documents cannot tell you.

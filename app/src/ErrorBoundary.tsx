@@ -21,7 +21,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Stays in this browser: there is no error reporting service, which is the same promise the
     // landing page makes about activity data.
-    console.error('traversed crashed', error, info.componentStack);
+    console.error('GroundCover crashed', error, info.componentStack);
   }
 
   render(): ReactNode {
