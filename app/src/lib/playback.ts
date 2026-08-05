@@ -88,3 +88,27 @@ export function traversedSpanSeconds(
 }
 
 
+
+/** One route in the replay: the span over which it first covered new ground. */
+export interface Route {
+  from: number;
+  to: number;
+}
+
+/**
+ * Where a playhead sits within a reel: which route, and how far through it.
+ *
+ * Derived rather than remembered. The reel is rebuilt whenever new history lands, and a Strava
+ * sync arrives newest first, so each batch inserts older activities at the front and shifts
+ * every index. An index carried across that rebuild points at a different route and the replay
+ * jumps somewhere else in time; a timestamp means the same thing whatever the reel looks like.
+ */
+export function cueAt(reel: readonly Route[], playhead: number | null): { i: number; t: number } {
+  if (reel.length === 0 || playhead === null) return { i: 0, t: 0 };
+  let i = 0;
+  while (i < reel.length - 1 && reel[i].to < playhead) i++;
+  const r = reel[i];
+  const dur = r.to - r.from;
+  const t = dur > 0 ? Math.min(0.999, Math.max(0, (playhead - r.from) / dur)) : 0;
+  return { i, t };
+}

@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  cueAt,
   routeDrawSeconds,
   traversedSpanSeconds,
   MAX_EMPTY_GAP_S,
@@ -73,5 +74,55 @@ describe('traversedSpanSeconds', () => {
   it('never returns zero, so the pacing division is always safe', () => {
     expect(traversedSpanSeconds(t, t, [], true)).toBeGreaterThan(0);
     expect(traversedSpanSeconds(t, t, [], false)).toBeGreaterThan(0);
+  });
+});
+
+describe('cueAt', () => {
+  const t = 1_700_000_000;
+  const reel = [
+    { from: t, to: t + 3600 },
+    { from: t + 5 * DAY, to: t + 5 * DAY + 1800 },
+    { from: t + 9 * DAY, to: t + 9 * DAY + 7200 },
+  ];
+
+  it('starts at the first route when there is no playhead yet', () => {
+    expect(cueAt(reel, null)).toEqual({ i: 0, t: 0 });
+    expect(cueAt([], t)).toEqual({ i: 0, t: 0 });
+  });
+
+  it('finds the route the playhead is inside, and how far through', () => {
+    expect(cueAt(reel, t + 1800)).toEqual({ i: 0, t: 0.5 });
+    expect(cueAt(reel, t + 9 * DAY + 3600)).toEqual({ i: 2, t: 0.5 });
+  });
+
+  it('lands on the next route when the playhead is in the gap before it', () => {
+    const c = cueAt(reel, t + 2 * DAY);
+    expect(c.i).toBe(1);
+    expect(c.t).toBe(0);
+  });
+
+  it('survives the reel growing at the front, which is how a sync delivers history', () => {
+    // A newest-first sync prepends older activities; every index shifts by two.
+    const older = [
+      { from: t - 40 * DAY, to: t - 40 * DAY + 900 },
+      { from: t - 20 * DAY, to: t - 20 * DAY + 900 },
+    ];
+    const grown = [...older, ...reel];
+    const playhead = t + 5 * DAY + 900;
+    const before = cueAt(reel, playhead);
+    const after = cueAt(grown, playhead);
+    // Different index, same route and same position within it -- which is the whole point.
+    expect(after.i).toBe(before.i + older.length);
+    expect(grown[after.i]).toEqual(reel[before.i]);
+    expect(after.t).toBeCloseTo(before.t, 9);
+  });
+
+  it('never reports a fraction that would skip a route entirely', () => {
+    expect(cueAt(reel, t + 1e9).t).toBeLessThan(1);
+    expect(cueAt(reel, t - 1e9).t).toBe(0);
+  });
+
+  it('handles a route that minted a single instant', () => {
+    expect(cueAt([{ from: t, to: t }], t)).toEqual({ i: 0, t: 0 });
   });
 });

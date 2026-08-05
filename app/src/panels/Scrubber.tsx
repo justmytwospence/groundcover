@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useStore } from '../state/store.js';
-import { routeDrawSeconds, traversedSpanSeconds, PLAYBACK_SECONDS } from '../lib/playback.js';
+import { cueAt, routeDrawSeconds, traversedSpanSeconds, PLAYBACK_SECONDS } from '../lib/playback.js';
 
 const DAY = 86400;
 
@@ -158,13 +158,14 @@ export function Scrubber() {
       traversedSpanSeconds(t0, t1, starts, false) - inWindow.reduce((n, r) => n + (r.to - r.from), 0),
     );
 
-    // Resuming picks up where it stopped; starting fresh begins at the first route.
-    if (cue.current === null || useStore.getState().playhead === null) {
-      const at = useStore.getState().playhead;
-      let i = 0;
-      if (at !== null) while (i < inWindow.length - 1 && inWindow[i].to < at) i++;
-      cue.current = { i, t: 0 };
-    }
+    // Derived from the playhead every time, never carried across.
+    //
+    // The cue is an index, and the reel it indexes is rebuilt whenever new history lands --
+    // and a Strava sync arrives NEWEST FIRST, so each batch inserts older activities at the
+    // front and shifts every index. A carried-over index then points at a different route and
+    // the replay jumps somewhere else in time. The playhead is a timestamp and means the same
+    // thing whatever the reel looks like, so it is the thing worth trusting.
+    cue.current = cueAt(inWindow, useStore.getState().playhead);
 
     let raf = 0;
     let last = performance.now();
