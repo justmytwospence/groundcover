@@ -116,6 +116,8 @@ function Credentials({ onBack, onConnected }: { onBack: () => void; onConnected:
   const [domain, setDomain] = useState(DEFAULT_CALLBACK_DOMAIN);
   const [pasted, setPasted] = useState('');
   const [awaitingPaste, setAwaitingPaste] = useState(false);
+  /** Set when the browser blocked the new tab, so the link can be offered directly. */
+  const [popupBlockedUrl, setPopupBlockedUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -157,10 +159,11 @@ function Credentials({ onBack, onConnected }: { onBack: () => void; onConnected:
       // from a user gesture, and this may be the last gesture before the page leaves for Strava.
       await requestPersistence();
       if (!(await persist())) return;
-      const tookOverPage = await beginAuthorization();
-      // Only reached when Strava opened in its own tab, which is the case whenever the callback
-      // domain is not this host -- so this page is still here to receive what they copy.
-      if (!tookOverPage) setAwaitingPaste(true);
+      const started = await beginAuthorization();
+      if (started.kind === 'redirected') return; // this page is going away
+      // Strava is in its own tab, so this page survives to receive what they copy.
+      setPopupBlockedUrl(started.kind === 'blocked' ? started.url : null);
+      setAwaitingPaste(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -280,6 +283,30 @@ function Credentials({ onBack, onConnected }: { onBack: () => void; onConnected:
 
         {!awaitingPaste && (
           <>
+            {!selfHosted && (
+              <div className="connect-warn" style={{ marginTop: 18 }}>
+                <strong>Read this before you click &mdash; the next page cannot tell you.</strong>
+                <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.65 }}>
+                  <li>Strava opens in a new tab. Approve there.</li>
+                  <li>
+                    It then sends that tab to{' '}
+                    <code>{redirectUriFor(domain.trim() || DEFAULT_CALLBACK_DOMAIN)}</code>, which
+                    will show <strong>&ldquo;This site can&rsquo;t be reached&rdquo;</strong> or
+                    similar. <strong>That error is what success looks like.</strong> Nothing is
+                    running at that address, which is exactly why your authorization code is safe
+                    there &mdash; it was never sent to any server.
+                  </li>
+                  <li>
+                    <strong>Copy the whole address</strong> out of that tab&rsquo;s address bar.
+                  </li>
+                  <li>
+                    <strong>Come back to this tab</strong> &mdash; it stays open and waiting
+                    &mdash; and paste the address into the box that will be here.
+                  </li>
+                </ol>
+              </div>
+            )}
+
             <div style={{ marginTop: 20 }}>
               <ConnectButton onClick={() => void authorize()}>
                 {busy ? 'Working…' : 'Authorize with Strava'}
@@ -297,14 +324,28 @@ function Credentials({ onBack, onConnected }: { onBack: () => void; onConnected:
         {awaitingPaste && (
           <div className="connect-paste">
             <h2>Now copy the address you landed on</h2>
+            {popupBlockedUrl ? (
+              <p>
+                Your browser blocked the new tab.{' '}
+                <a href={popupBlockedUrl} target="_blank" rel="noreferrer noopener">
+                  Open Strava&rsquo;s authorization page
+                </a>{' '}
+                yourself, then come back here.
+              </p>
+            ) : (
+              <p>Strava is open in another tab. Approve it there, then come back.</p>
+            )}
             <p>
-              Strava opened in another tab. After you approve, it sends your browser to{' '}
-              <code>{redirectUriFor(domain.trim() || DEFAULT_CALLBACK_DOMAIN)}</code>, which will
-              probably show a &ldquo;cannot connect&rdquo; error.
+              You will land on <code>{redirectUriFor(domain.trim() || DEFAULT_CALLBACK_DOMAIN)}</code>{' '}
+              and it will fail to load. <strong>That is the expected result</strong>, not a
+              mistake &mdash; nothing is running at that address, which is precisely why your
+              authorization code is safe sitting in the address bar rather than in somebody&rsquo;s
+              server logs.
             </p>
             <p>
-              <strong>That error is the expected result.</strong> Your authorization code is in the
-              address bar and was never sent anywhere. Copy the whole address and paste it here.
+              Copy the <strong>whole address</strong> from that tab and paste it below. It looks
+              like <code>http://localhost/?state=…&amp;code=…&amp;scope=…</code> &mdash; the long{' '}
+              <code>code=</code> part is the piece that matters.
             </p>
             <div className="connect-field" style={{ marginTop: 12 }}>
               <label htmlFor="paste">Pasted address</label>

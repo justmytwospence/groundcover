@@ -43,6 +43,14 @@ function randomState(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+export type AuthStart =
+  /** This page is being replaced; nothing further will run. */
+  | { kind: 'redirected' }
+  /** Strava opened in its own tab. This page stays, waiting for the pasted address. */
+  | { kind: 'popup'; url: string }
+  /** The browser blocked the new tab. The caller must offer the link directly. */
+  | { kind: 'blocked'; url: string };
+
 /**
  * Starts the authorization.
  *
@@ -50,10 +58,8 @@ function randomState(): string {
  * so the whole thing is invisible. When it is anything else -- and it usually is, because Strava
  * allows one per application and most people's is already spoken for -- Strava is opened in a
  * separate tab instead, so this page survives to receive the pasted result.
- *
- * Returns true when it took over the page, meaning the caller will not run again.
  */
-export async function beginAuthorization(): Promise<boolean> {
+export async function beginAuthorization(): Promise<AuthStart> {
   const creds = await loadCreds();
   if (!creds) throw new Error('Add your Strava app credentials first.');
 
@@ -66,10 +72,12 @@ export async function beginAuthorization(): Promise<boolean> {
 
   if (isSelfHosted(creds.callbackDomain)) {
     window.location.assign(url);
-    return true;
+    return { kind: 'redirected' };
   }
-  window.open(url, '_blank', 'noopener');
-  return false;
+  // A blocked popup returns null, and silently doing nothing here would look exactly like a
+  // dead button. The caller gets the URL either way so it can always offer a link.
+  const win = window.open(url, '_blank', 'noopener');
+  return win ? { kind: 'popup', url } : { kind: 'blocked', url };
 }
 
 /**
