@@ -7,13 +7,12 @@ then `docs/build-plan.md`. This file carries only what those documents cannot te
 
 - `.env.local` holds `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`. `.strava-token.json` holds
   the rotating refresh token. Both are gitignored. **Never print, log, or echo a token value.**
-- Strava allows one API application per account, so this project shares the registration
-  other tools on the same account use. It holds its **own** refresh token in its
-  own `.strava-token.json` and must never read or write the another tool's token stores (a server-side store
-  `a shared key`, `another store`, `another store`). See `docs/data-pipeline.md`
-  section 1.2.
-- The rate-limit budget is shared with another tool. A long backfill running alongside a another tool sync
-  makes both see 429s; both retry, so it degrades rather than breaks.
+- Strava allows one API application per account. If yours is already used by another tool,
+  this project still holds its **own** refresh token in its own `.strava-token.json` and never
+  reads or writes any other store: Strava rotates the refresh token on every refresh, so two
+  consumers sharing one copy invalidate each other. See `docs/data-pipeline.md` section 1.2.
+- Rate limits belong to the *application*, so anything else on the same registration shares the
+  budget. Overlapping runs make both see 429s; both retry, so it degrades rather than breaks.
 - If auth breaks, re-run `npm run auth`. Deleting `.strava-token.json` first is safe.
 
 ## Commands

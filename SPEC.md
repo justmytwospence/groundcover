@@ -215,7 +215,7 @@ groundcover/
 
 ### 3.2 Stack and conventions
 
-Match the conventions already in use across this workspace:
+Conventions:
 
 - TypeScript everywhere. `npm` with `package-lock.json` (never pnpm or yarn).
 - npm workspaces for `packages/*` and `app`.
@@ -340,34 +340,35 @@ the UI. Nothing else about v1 needs to anticipate it. Do not build any part of i
 
 Full detail in `docs/data-pipeline.md`. The load-bearing points:
 
-### 4.1 Reuse the existing Strava application
+### 4.1 The Strava application
 
-Strava allows one API application per account, and the account already has one — the
-registration other tools on the same account share. GroundCover uses the same
-`STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, copied into this project's own gitignored
-`.env.local`.
+Strava allows one API application per account. Register one at
+<https://www.strava.com/settings/api>, or reuse the one you already have; either way its
+`STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` go in this project's own gitignored `.env.local`.
 
 The Authorization Callback Domain must be `localhost` for `npm run auth` to complete. Strava
 matches on domain rather than port, so the callback at `http://localhost:8721/callback` works
 without further configuration.
 
-Read limits are whatever the shared app is provisioned for: 100 reads per 15 minutes and
-1,000 per day in Single Player Mode, doubled by the self-service upgrade to 10 athletes in
-the API Settings Dashboard. Applying that upgrade is worthwhile and harmless to the other
-consumers.
+Read limits are whatever the app is provisioned for: 100 reads per 15 minutes and 1,000 per
+day in Single Player Mode, doubled by the self-service upgrade to 10 athletes in the API
+Settings Dashboard. Applying that upgrade is worthwhile and harmless to anything else using
+the same registration.
 
-### 4.2 Sharing one app safely
+### 4.2 The refresh-token hazard
 
-`an internal design note` documents a real "multi-store hazard": Strava rotates the refresh
-token on every refresh, and independent consumers holding copies of the same token can
-invalidate each other. another tool holds copies in a server-side store (`a shared key`), in `.env.local`,
-and in `.strava-token.json`; the another consumer holds another.
+Strava rotates the refresh token on every refresh and invalidates the previous one
+immediately. Any two consumers holding copies of the same token therefore invalidate each
+other, and the failure is silent until one of them next tries to refresh.
 
-GroundCover becomes another such consumer, so it follows the same self-healing discipline:
-it performs its **own** OAuth authorization, holds its **own** refresh token in its own
-`.strava-token.json`, never reads or writes the another tool's stores, and persists every rotation
-immediately. It also shares the app's rate-limit budget, so a long backfill running alongside
-a another tool sync will make both see 429s — both retry, so this degrades rather than breaks.
+So GroundCover performs its **own** OAuth authorization, holds its **own** refresh token in
+its own `.strava-token.json`, never reads or writes any other store, and persists every
+rotation the moment it happens. If you use the same application elsewhere, give that tool its
+own authorization too rather than copying a token between them.
+
+Rate limits belong to the application rather than to a consumer, so anything else on the same
+registration shares the budget: overlapping runs make both see 429s, and both retry, so this
+degrades rather than breaks.
 
 Never print, log, or commit token values. `.env.local` and `.strava-token.json` are
 gitignored from the first commit.

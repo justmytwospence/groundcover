@@ -12,3 +12,6 @@ dist/
 data/
 .local/
 .vercel
+
+# Session scratch, not project source.
+.claude/

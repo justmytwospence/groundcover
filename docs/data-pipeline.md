@@ -7,43 +7,41 @@ web app consumes.
 
 ## 1. Strava application setup (manual, do this first)
 
-### 1.1 Reuse the existing application
+### 1.1 The application
 
-Strava allows one API application per account, and the account already has one — the
-registration other tools on the same account share. GroundCover uses the same
-`STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, copied into its own gitignored `.env.local`.
+Strava allows one API application per account. Register one at
+<https://www.strava.com/settings/api>, or reuse the one you already have; either way its
+`STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` go in this project's own gitignored `.env.local`.
 
-Confirm the Authorization Callback Domain at <https://www.strava.com/settings/api> is
-`localhost`; `npm run auth` redirects to `http://localhost:8721/callback` and Strava matches
-on domain, so any port works. If the domain is set to something else, `npm run auth` fails at
-the redirect and the domain must be changed (which is safe — it does not affect another tool,
-whose OAuth also runs against localhost in development and against its Vercel domain in
-production only through a separately configured callback).
+Set the Authorization Callback Domain to `localhost`. `npm run auth` redirects to
+`http://localhost:8721/callback`, and Strava matches on domain rather than port, so any port
+works. Strava stores exactly one callback domain per application, so if something else already
+depends on a different value, changing it will break that tool's *next authorization* —
+existing tokens keep working.
 
-Read limits are whatever the shared app is provisioned for. If it is still in Single Player
-Mode (athlete capacity 1), the limits are 100 reads per 15 minutes and 1,000 per day; the
-self-service upgrade to 10 athletes in the API Settings Dashboard doubles both. Applying that
-upgrade is worthwhile and harmless to existing consumers.
+Read limits are whatever the app is provisioned for. In Single Player Mode (athlete capacity 1)
+they are 100 reads per 15 minutes and 1,000 per day; the self-service upgrade to 10 athletes in
+the API Settings Dashboard doubles both. It is worth applying and harmless to anything else
+using the same registration.
 
-### 1.2 Sharing one app: the refresh-token hazard
+### 1.2 The refresh-token hazard
 
-Because the registration is shared, GroundCover becomes another consumer of a credential the
-another tool depends on. `an internal design note` documents the hazard: Strava rotates the refresh
-token on every refresh, and several stores already hold copies (a server-side store under
-`a shared key`, `another store`, `another store`, and the another consumer).
+Strava rotates the refresh token on every refresh and invalidates the previous one immediately.
+Two consumers holding copies of the same token therefore invalidate each other, and the failure
+is silent until one of them next tries to refresh — which may be days later.
 
 The rules that keep this safe, and they are not optional:
 
 - GroundCover performs its **own** OAuth authorization and holds its **own** refresh token in
-  its own `.strava-token.json`. It never reads or writes the another tool's token stores.
-- GroundCover persists every rotation immediately, so its own token never goes stale.
-- The backfill shares the app's rate-limit budget with another tool. Run large backfills when the
-  another tool's sync is not running, and expect another tool to hit 429s if they overlap — both sides
-  retry, so this degrades rather than breaks.
+  its own `.strava-token.json`. It never reads or writes any other store.
+- It persists every rotation immediately, before anything else can throw, so its own token
+  never goes stale.
+- Rate limits belong to the application, so anything else on the same registration shares the
+  budget. Expect 429s if a large backfill overlaps another tool's sync; both sides retry, so
+  this degrades rather than breaks.
 
-If a re-authorization ever does invalidate the another tool's refresh token, another tool has a documented
-break-glass procedure: `DEL a shared key` plus `npm run seed:redis` in production, or refresh
-`.env.local` and delete `.strava-token.json` locally.
+If you use the same application elsewhere, give that tool its own authorization rather than
+copying a token between them.
 
 ### 1.3 Credential storage
 
@@ -64,8 +62,8 @@ rewritten by every token refresh:
 Rules, non-negotiable:
 
 - Both files are in `.gitignore` before the first commit that could touch them.
-- Never log, print, or include a token value in an error message. `another tool` logs its access
-  token at debug level; do not copy that.
+- Never log, print, or include a token value in an error message — not even at debug level,
+  and not even the access token.
 - The refresh token in `.env.local` is only a bootstrap seed if one is present at all;
   `.strava-token.json` is the source of truth once it exists.
 
@@ -514,8 +512,8 @@ code:
 
 - Credentials live in `.env.local` and `.strava-token.json`, both gitignored. Never print
   token values.
-- GroundCover uses its **own** Strava app registration, deliberately separate from the one
-  another tool and `another tool` share. Do not point it at the another tool's credentials; see section 1.2.
+- GroundCover holds its **own** refresh token, separate from any other tool using the same
+  Strava application. Never copy a token between them; see section 1.2.
 - `npm run sync` is resumable and expected to take hours on a first backfill. Re-run it; it
   picks up where it stopped.
 - `npm run build:ledger` is a full rebuild every time, by design.
