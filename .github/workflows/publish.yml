@@ -1,0 +1,77 @@
+# Redeploys the publish deployment (groundcover-spencer) when the app changes.
+#
+# Why this exists at all: the BYO deployment is connected to this repository and redeploys
+# itself on push, but the publish deployment cannot be. It deploys from .local/publish/, a
+# staged tree that is gitignored and never in the repository, because the two deployments need
+# different vercel.json files and one repository can only hold one.
+#
+# What this fixes: the nightly cron refreshes DATA, never CODE. api/refresh.js embeds a bundled
+# snapshot of packages/ledger taken at stage time, so without this workflow an algorithm change
+# would be live on the BYO site while the published map kept rebuilding itself nightly with the
+# old code -- indefinitely, and silently.
+#
+# The Vercel token here is scoped to the groundcover-spencer project alone. It cannot touch the
+# BYO deployment. The private blob store's token is deliberately NOT available to CI: this job
+# builds and deploys, it never reads anyone's GPS.
+
+name: Publish deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Anything the staged bundle or the refresh function is built from. Docs-only commits do
+      # not need a 60-second deploy.
+      - 'app/**'
+      - 'packages/**'
+      - 'scripts/publish/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+
+# Only `push` on main and manual runs reach this, so fork pull requests never see the secrets.
+permissions:
+  contents: read
+
+concurrency:
+  # A newer commit supersedes an in-flight deploy rather than racing it to production.
+  group: publish-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Covers the ledger and the pack format. The app build inside publish:stage runs
+      # `tsc --noEmit` as well, so a type error fails here rather than in production.
+      - name: Test the algorithm and the stream pack format
+        run: npx vitest --run packages scripts
+
+      - name: Stage the publish tree
+        run: npm run publish:stage
+        env:
+          # Both are public by construction: the pointer is the URL every visitor's browser
+          # fetches, and the BYO link is a public site. Neither is a secret.
+          PUBLISH_POINTER_URL: https://sp9byen5ncsw4eie.public.blob.vercel-storage.com/current.json
+          PUBLISH_BYO_URL: https://groundcovermap.vercel.app
+
+      # Deliberately NOT `vercel deploy`. The CLI calls GET /v2/user on startup, which a
+      # project-scoped token answers with 404, so every CLI command dies at "User not found."
+      # before reaching a deployment -- the CLI only works with a token that can act on the
+      # whole account. Deploying through the REST API is what lets the token stay scoped.
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx tsx scripts/publish/deploy.ts
