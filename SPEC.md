@@ -26,10 +26,20 @@ requires them.
 routine.** Everything below is subordinate to that.
 
 1. No GPS, no artifact, and no token belonging to any person may ever be committed to this
-   repository or included in a deployed build. This is enforced structurally, not by
-   discipline: built artifacts live in `.local/artifacts/`, which is outside every directory
+   repository or included in a build of **the BYO product**. This is enforced structurally, not
+   by discipline: built artifacts live in `.local/artifacts/`, which is outside every directory
    `vite build` copies from, and `.vercelignore` names `data/` and `.local/` explicitly so a
    deploy cannot upload them even if `.gitignore` changes.
+
+   The **publish deployment** (section 4.6) is the one deliberate exception, and it is scoped
+   rather than trusted. It is a separate Vercel project, deployed from a separate staged tree,
+   carrying only the owner's own artifacts and only because the owner asked for them to be
+   public. It changes nothing about the BYO product: that bundle still contains no code path
+   that fetches coverage over a network, which is checked by building it and confirming the
+   published artifact source is absent, not by assuming the bundler removed it.
+
+   Nobody else's data is ever in scope for either. A visitor's history still moves from Strava
+   to their own browser and stops there.
 2. In the public product there is no server, no account and no database. A visitor's history
    moves from Strava to their own browser and stops there. The `Content-Security-Policy` in
    `vercel.json` names Strava and the basemap in `connect-src` and nothing else, so this is
@@ -441,6 +451,43 @@ manifest carries both a `formatVersion` and a hash of the algorithm parameters, 
 treats them differently: a `formatVersion` mismatch means the binary blocks are unreadable and
 the app shows the setup card, while a `paramsHash` mismatch is only a staleness warning and
 the app still renders. See `docs/data-pipeline.md` section 6 step 1.
+
+### 4.6 The publish deployment
+
+A second, optional deployment that serves **the owner's own map, read only, to the public**. It
+is a separate Vercel project (`groundcover-spencer`) deployed from a staged tree at
+`.local/publish/`, never from this repo directly -- one repo holds one `vercel.json`, and the two
+deployments need opposite ones. The BYO deployment allows Strava in `connect-src` and has no
+functions; this one forbids Strava, allows the blob origin, and declares a cron.
+
+Everything runs in the cloud. `api/refresh` wakes daily, pages what is new, fetches those
+streams, rebuilds the whole ledger and republishes. Nothing depends on the owner's laptop being
+awake, which is the entire point of the design.
+
+**Storage is two blob stores, and the split is load-bearing.** Vercel Blob sets access per
+*store*, not per object, and a store created from the CLI is public. So:
+
+| store | access | holds |
+|---|---|---|
+| `groundcover-public` | public | built artifacts, `current.json` |
+| `groundcover-private` | **private** | the rotating refresh token, summaries, the raw GPS corpus |
+
+The private store must be created from the dashboard; the CLI cannot make one. Putting the
+stream corpus or the token in a public store would protect one person's home address with
+nothing but an unguessable URL.
+
+The corpus is sharded by calendar year (`streams/<year>.pack`, see `scripts/publish/pack.ts`).
+A full rebuild has to read every stream, and reading 1,300 objects would spend a minute of the
+300 s function budget on round trips alone, against a 1,200 ops/minute ceiling. Eight reads
+does not. The rebuild itself measures 5.9 s at 109 MB peak, so I/O is the only real constraint.
+
+**The refresh token moves to the cloud and cannot be in two places.** Strava rotates it on every
+refresh (section 4.2), so once seeded, the cloud owns it and `npm run sync` on the laptop stops
+working. That is the intended end state, not a regression.
+
+Artifacts are published under `builds/<buildId>/` and are immutable, so they cache for a month;
+only the small `current.json` pointer is overwritten, and it alone carries a short TTL. The
+previous build is deleted only after the pointer flip, so a reader mid-fetch is never orphaned.
 
 ---
 
