@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { clearAll } from '../lib/db.js';
 import type { BuildResponse } from '../worker/build.worker.js';
+import { IS_PUBLISHED_BUILD } from '../worker/artifactSource.js';
 import { isConnected } from './creds.js';
 import { completeAuthorization } from './oauth.js';
 import { runSync, type SyncProgress } from './sync.js';
@@ -150,6 +151,15 @@ export function useConnection(onArtifacts: () => void): Connection {
   }, []);
 
   useEffect(() => {
+    // The publish deployment shows one fixed map and owns no credentials. Running the OAuth
+    // completion here would leave `state` stuck on 'checking' behind a redirect that can never
+    // arrive, and touching IndexedDB would let a visitor's own map from the BYO deployment
+    // shadow the published one when both are served from the same origin.
+    if (IS_PUBLISHED_BUILD) {
+      setState('disconnected');
+      return;
+    }
+
     void (async () => {
       const result = await completeAuthorization();
 
