@@ -18,7 +18,13 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest --run",
-    "build:local": "npm run build:ledger && npm -w app run build"
+    "build:local": "npm run build:ledger && npm -w app run build",
+    "publish:provision": "tsx scripts/publish/provision.ts",
+    "publish:ci-token": "tsx scripts/publish/ci-token.ts",
+    "publish:seed": "tsx scripts/publish/seed.ts",
+    "publish:refresh": "tsx scripts/publish/refresh-once.ts",
+    "publish:stage": "tsx scripts/publish/stage.ts",
+    "publish:deploy": "npm run publish:stage && tsx scripts/publish/deploy.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
@@ -32,6 +38,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "@vercel/blob": "^2.7.0",
     "pako": "^2.1.0",
     "zod": "^3.24.1"
   }
