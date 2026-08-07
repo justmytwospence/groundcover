@@ -6,6 +6,7 @@ dist/
 # credentials - never commit
 .env.local
 .env
+.env.publish.local
 .strava-token.json
 
 # regenerable data, and the owner's own coverage
