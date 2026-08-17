@@ -9,24 +9,24 @@
  * picking we call ourselves is fully under our control and simply works.
  */
 
-import { useEffect, useRef } from 'react';
-import maplibregl from 'maplibre-gl';
-import { Deck } from '@deck.gl/core';
-import { LineLayer, PathLayer } from '@deck.gl/layers';
-import 'maplibre-gl/dist/maplibre-gl.css';
-import { lngToX, latToY } from '@um/ledger';
-import { readMapFromHash, useStore } from '../state/store.js';
-import { BASEMAP_STYLE, TERRAIN_TILES, type Theme } from '../lib/theme.js';
-import type { Viewport } from '../worker/protocol.js';
+import { useEffect, useRef } from "react";
+import maplibregl from "maplibre-gl";
+import { Deck } from "@deck.gl/core";
+import { LineLayer, PathLayer } from "@deck.gl/layers";
+import "maplibre-gl/dist/maplibre-gl.css";
+import { lngToX, latToY } from "@um/ledger";
+import { readMapFromHash, useStore } from "../state/store.js";
+import { BASEMAP_STYLE, TERRAIN_TILES, type Theme } from "../lib/theme.js";
+import type { Viewport } from "../worker/protocol.js";
 
 const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
   version: 8,
   sources: {},
   layers: [
     {
-      id: 'bg',
-      type: 'background',
-      paint: { 'background-color': theme === 'light' ? '#f4f4f1' : '#1b1f27' },
+      id: "bg",
+      type: "background",
+      paint: { "background-color": theme === "light" ? "#f4f4f1" : "#1b1f27" },
     },
   ],
 });
@@ -34,13 +34,34 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
 /** How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline. */
 const PICK_RADIUS = 10;
 
+/**
+ * Every camera move the app makes itself, rather than in response to a drag or a wheel.
+ *
+ * `essential: true` is the point of this helper. Without it MapLibre honours the OS
+ * `prefers-reduced-motion` setting by discarding `duration` entirely, so a refit becomes an
+ * instant jump-cut -- the map teleports and the viewer loses track of where they were. Framing
+ * a route the viewer did not ask to be framed is exactly the move that needs to be readable,
+ * so it is declared essential and animated on every machine. The durations stay short (400 to
+ * 900 ms), which is the actual concession to reduced motion.
+ */
+function easeToBounds(
+  map: maplibregl.Map,
+  bb: [maplibregl.LngLatLike, maplibregl.LngLatLike],
+  opts: { padding: number; duration: number },
+) {
+  map.fitBounds(bb, { ...opts, essential: true });
+}
+
 export interface MapHandles {
   setColors: (colors: Uint8Array, version: number) => void;
   setGeometry: (src: Float32Array, dst: Float32Array, n: number) => void;
   setActivePath: (path: Array<[number, number]> | null) => void;
   getViewport: () => Viewport | null;
   getMapState: () => { c: [number, number]; z: number } | null;
-  flyToBounds: (b: [number, number, number, number], durationMs?: number) => void;
+  flyToBounds: (
+    b: [number, number, number, number],
+    durationMs?: number,
+  ) => void;
   fitIfNeeded: (b: [number, number, number, number]) => void;
   /** Reflect whether something is under the cursor. */
   setHovering: (on: boolean) => void;
@@ -51,10 +72,24 @@ interface Props {
   onViewportChange: () => void;
   /** Cursor moved over the map: geographic position, a pixel-derived search radius in
    *  metres, and the screen point for tooltip placement. null when the cursor left. */
-  onHover: (at: { lng: number; lat: number; radiusM: number; x: number; y: number } | null) => void;
+  onHover: (
+    at: {
+      lng: number;
+      lat: number;
+      radiusM: number;
+      x: number;
+      y: number;
+    } | null,
+  ) => void;
   /** Map clicked. Uses MapLibre's click event, which already distinguishes a click from the
    *  end of a drag. */
-  onPick: (at: { lng: number; lat: number; radiusM: number; x: number; y: number }) => void;
+  onPick: (at: {
+    lng: number;
+    lat: number;
+    radiusM: number;
+    x: number;
+    y: number;
+  }) => void;
 }
 
 export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
@@ -65,7 +100,11 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const boxing = useRef(false);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const deckRef = useRef<Deck | null>(null);
-  const geom = useRef<{ src: Float32Array; dst: Float32Array; n: number } | null>(null);
+  const geom = useRef<{
+    src: Float32Array;
+    dst: Float32Array;
+    n: number;
+  } | null>(null);
   const colorsRef = useRef<Uint8Array | null>(null);
   const colorVersion = useRef(0);
   const activePath = useRef<Array<[number, number]> | null>(null);
@@ -77,10 +116,10 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     const deck = deckRef.current;
     const g = geom.current;
     if (!deck || !g || !colorsRef.current) return;
-    const heat = useStore.getState().mode === 'heatmap';
+    const heat = useStore.getState().mode === "heatmap";
 
     const coverage = new LineLayer({
-      id: 'coverage',
+      id: "coverage",
       data: {
         length: g.n,
         attributes: {
@@ -89,7 +128,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
           getColor: { value: colorsRef.current, size: 4, normalized: true },
         },
       },
-      widthUnits: 'meters',
+      widthUnits: "meters",
       getWidth: 7,
       widthMinPixels: 1.2,
       widthMaxPixels: 8,
@@ -98,9 +137,9 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       parameters: heat
         ? ({
             blend: true,
-            blendColorSrcFactor: 'src-alpha',
-            blendColorDstFactor: 'one',
-            blendColorOperation: 'add',
+            blendColorSrcFactor: "src-alpha",
+            blendColorDstFactor: "one",
+            blendColorOperation: "add",
           } as const)
         : {},
       updateTriggers: { getColor: colorVersion.current },
@@ -110,11 +149,11 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     if (activePath.current && activePath.current.length > 1) {
       layers.push(
         new PathLayer({
-          id: 'active',
+          id: "active",
           data: [{ path: activePath.current }],
           getPath: (d: { path: Array<[number, number]> }) => d.path,
           getColor: [255, 255, 245, 235],
-          widthUnits: 'meters',
+          widthUnits: "meters",
           getWidth: 12,
           widthMinPixels: 2.5,
           capRounded: true,
@@ -138,10 +177,10 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     });
     mapRef.current = map;
 
-    map.on('error', (e) => {
+    map.on("error", (e) => {
       // A missing basemap must not take the coverage layer down with it.
-      if (String(e?.error?.message ?? '').includes('style'))
-          map.setStyle(fallbackStyle(useStore.getState().theme));
+      if (String(e?.error?.message ?? "").includes("style"))
+        map.setStyle(fallbackStyle(useStore.getState().theme));
     });
 
     const deck = new Deck({
@@ -172,9 +211,12 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       });
     };
     // 'move' fires continuously through animated flights, so the two stay locked together.
-    map.on('move', sync);
-    map.on('moveend', onViewportChange);
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.on("move", sync);
+    map.on("moveend", onViewportChange);
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      "bottom-right",
+    );
 
     // The nearest-site lookup runs in the worker, not through deck's picking: deck's picking
     // pass returns nothing in this setup (see the note at the top of this file), and the
@@ -187,12 +229,19 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       const ll = map.unproject([x, y]);
       // Ground metres per CSS pixel at this latitude and zoom.
       const mPerPx =
-        (156543.03392 * Math.cos((ll.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-      onHover({ lng: ll.lng, lat: ll.lat, radiusM: mPerPx * PICK_RADIUS, x, y });
+        (156543.03392 * Math.cos((ll.lat * Math.PI) / 180)) /
+        Math.pow(2, map.getZoom());
+      onHover({
+        lng: ll.lng,
+        lat: ll.lat,
+        radiusM: mPerPx * PICK_RADIUS,
+        x,
+        y,
+      });
     };
     const onLeave = () => onHover(null);
-    el.addEventListener('pointermove', onMove);
-    el.addEventListener('pointerleave', onLeave);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
 
     // ---- modifier-drag zoom box ----------------------------------------------------------
     //
@@ -205,10 +254,13 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     // start over. The click arrives right after pointerup, so one flag is enough.
     let swallowNextClick = false;
 
-    const paintBox = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const paintBox = (
+      a: { x: number; y: number },
+      b: { x: number; y: number },
+    ) => {
       const box = boxEl.current;
       if (!box) return;
-      box.style.display = 'block';
+      box.style.display = "block";
       box.style.left = `${Math.min(a.x, b.x)}px`;
       box.style.top = `${Math.min(a.y, b.y)}px`;
       box.style.width = `${Math.abs(a.x - b.x)}px`;
@@ -218,7 +270,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     const endBox = () => {
       boxStart = null;
       boxing.current = false;
-      if (boxEl.current) boxEl.current.style.display = 'none';
+      if (boxEl.current) boxEl.current.style.display = "none";
       map.dragPan.enable();
     };
 
@@ -244,39 +296,45 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       const rect = el.getBoundingClientRect();
       const end = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       const start = boxStart;
-      const dragged = Math.abs(start.x - end.x) > 8 && Math.abs(start.y - end.y) > 8;
+      const dragged =
+        Math.abs(start.x - end.x) > 8 && Math.abs(start.y - end.y) > 8;
       endBox();
       // A stray modifier-click is not a zoom request. Anything smaller than this would also
       // zoom to a degenerate box and leave the user somewhere they did not ask to be.
       if (!dragged) return;
       swallowNextClick = true;
-      map.fitBounds([map.unproject([start.x, start.y]), map.unproject([end.x, end.y])], {
-        padding: 24,
-        duration: 400,
-      });
+      easeToBounds(
+        map,
+        [map.unproject([start.x, start.y]), map.unproject([end.x, end.y])],
+        {
+          padding: 24,
+          duration: 400,
+        },
+      );
     };
 
     const onBoxKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && boxStart) endBox();
+      if (e.key === "Escape" && boxStart) endBox();
     };
     // Ctrl+drag is a right-click gesture on macOS; without this the menu interrupts the drag.
     const onCtxMenu = (e: Event) => {
       if (boxing.current) e.preventDefault();
     };
 
-    el.addEventListener('pointerdown', onBoxDown);
-    window.addEventListener('pointermove', onBoxMove);
-    window.addEventListener('pointerup', onBoxUp);
-    window.addEventListener('keydown', onBoxKey);
-    el.addEventListener('contextmenu', onCtxMenu);
+    el.addEventListener("pointerdown", onBoxDown);
+    window.addEventListener("pointermove", onBoxMove);
+    window.addEventListener("pointerup", onBoxUp);
+    window.addEventListener("keydown", onBoxKey);
+    el.addEventListener("contextmenu", onCtxMenu);
 
-    map.on('click', (e) => {
+    map.on("click", (e) => {
       if (swallowNextClick) {
         swallowNextClick = false;
         return;
       }
       const mPerPx =
-        (156543.03392 * Math.cos((e.lngLat.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
+        (156543.03392 * Math.cos((e.lngLat.lat * Math.PI) / 180)) /
+        Math.pow(2, map.getZoom());
       onPick({
         lng: e.lngLat.lng,
         lat: e.lngLat.lat,
@@ -321,7 +379,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
         return { c: [c.lng, c.lat], z: map.getZoom() };
       },
       flyToBounds: (bb, durationMs = 900) => {
-        map.fitBounds(
+        easeToBounds(
+          map,
           [
             [bb[0], bb[1]],
             [bb[2], bb[3]],
@@ -330,18 +389,24 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
         );
       },
       setHovering: (on) => {
-        map.getCanvas().style.cursor = on ? 'pointer' : '';
+        map.getCanvas().style.cursor = on ? "pointer" : "";
       },
       fitIfNeeded: (bb) => {
         const cur = map.getBounds();
         const contained =
-          bb[0] >= cur.getWest() && bb[2] <= cur.getEast() && bb[1] >= cur.getSouth() && bb[3] <= cur.getNorth();
+          bb[0] >= cur.getWest() &&
+          bb[2] <= cur.getEast() &&
+          bb[1] >= cur.getSouth() &&
+          bb[3] <= cur.getNorth();
         const curW = cur.getEast() - cur.getWest();
         const curH = cur.getNorth() - cur.getSouth();
         // Already framed AND filling a reasonable share of the view: leave it alone.
-        const fillsView = (bb[2] - bb[0]) / (curW || 1) > 0.3 && (bb[3] - bb[1]) / (curH || 1) > 0.3;
+        const fillsView =
+          (bb[2] - bb[0]) / (curW || 1) > 0.3 &&
+          (bb[3] - bb[1]) / (curH || 1) > 0.3;
         if (contained && fillsView) return;
-        map.fitBounds(
+        easeToBounds(
+          map,
           [
             [bb[0], bb[1]],
             [bb[2], bb[3]],
@@ -351,18 +416,18 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       },
     };
 
-    map.once('load', () => onReady(handles));
+    map.once("load", () => onReady(handles));
     // Hand over handles even if the basemap never loads.
     const t = window.setTimeout(() => onReady(handles), 4000);
     return () => {
       window.clearTimeout(t);
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('pointerleave', onLeave);
-      el.removeEventListener('pointerdown', onBoxDown);
-      window.removeEventListener('pointermove', onBoxMove);
-      window.removeEventListener('pointerup', onBoxUp);
-      window.removeEventListener('keydown', onBoxKey);
-      el.removeEventListener('contextmenu', onCtxMenu);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+      el.removeEventListener("pointerdown", onBoxDown);
+      window.removeEventListener("pointermove", onBoxMove);
+      window.removeEventListener("pointerup", onBoxUp);
+      window.removeEventListener("keydown", onBoxKey);
+      el.removeEventListener("contextmenu", onCtxMenu);
       deck.finalize();
       deckRef.current = null;
       map.remove();
@@ -386,39 +451,43 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
 
     const apply = () => {
       if (!map.isStyleLoaded()) return;
-      const has = Boolean(map.getLayer('um-hillshade'));
+      const has = Boolean(map.getLayer("um-hillshade"));
 
       if (!hillshade) {
-        if (has) map.removeLayer('um-hillshade');
-        if (map.getSource('um-dem')) map.removeSource('um-dem');
+        if (has) map.removeLayer("um-hillshade");
+        if (map.getSource("um-dem")) map.removeSource("um-dem");
         return;
       }
       if (has) return;
 
-      if (!map.getSource('um-dem')) {
-        map.addSource('um-dem', {
-          type: 'raster-dem',
+      if (!map.getSource("um-dem")) {
+        map.addSource("um-dem", {
+          type: "raster-dem",
           tiles: [TERRAIN_TILES],
-          encoding: 'terrarium',
+          encoding: "terrarium",
           tileSize: 256,
           maxzoom: 13,
-          attribution: 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
+          attribution:
+            'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
         });
       }
-      const firstSymbol = map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
+      const firstSymbol = map
+        .getStyle()
+        .layers?.find((l) => l.type === "symbol")?.id;
       map.addLayer(
         {
-          id: 'um-hillshade',
-          type: 'hillshade',
-          source: 'um-dem',
+          id: "um-hillshade",
+          type: "hillshade",
+          source: "um-dem",
           paint: {
             // Strong enough to read as terrain, restrained enough not to compete with the
             // gold. On the light basemap the highlight does almost nothing -- the surface is
             // already near-white -- so the relief has to come from the shadow side.
-            'hillshade-exaggeration': theme === 'light' ? 0.6 : 0.45,
-            'hillshade-shadow-color': theme === 'light' ? '#46505f' : '#000000',
-            'hillshade-highlight-color': theme === 'light' ? '#ffffff' : '#9db0cf',
-            'hillshade-accent-color': theme === 'light' ? '#6f7885' : '#0a0d12',
+            "hillshade-exaggeration": theme === "light" ? 0.6 : 0.45,
+            "hillshade-shadow-color": theme === "light" ? "#46505f" : "#000000",
+            "hillshade-highlight-color":
+              theme === "light" ? "#ffffff" : "#9db0cf",
+            "hillshade-accent-color": theme === "light" ? "#6f7885" : "#0a0d12",
           },
         },
         firstSymbol,
@@ -426,9 +495,9 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     };
 
     apply();
-    map.on('styledata', apply);
+    map.on("styledata", apply);
     return () => {
-      map.off('styledata', apply);
+      map.off("styledata", apply);
     };
   }, [hillshade, theme]);
 
@@ -454,11 +523,17 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   }, [theme]);
 
   return (
-    <div style={{ position: 'absolute', inset: 0 }}>
-      <div ref={container} style={{ position: 'absolute', inset: 0 }} />
+    <div style={{ position: "absolute", inset: 0 }}>
+      <div ref={container} style={{ position: "absolute", inset: 0 }} />
       <canvas
         ref={deckCanvas}
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
       />
       <div ref={boxEl} className="zoom-box" />
     </div>
