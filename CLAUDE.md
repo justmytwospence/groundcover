@@ -49,6 +49,11 @@ npm run publish:deploy    # stage .local/publish/ and deploy it
   `npm run auth` plus a re-seed, which locks the cloud out instead.
 - `.local/publish/.vercel/` holds the link to the publish project. `publish:stage` preserves it
   while clearing everything else; do not delete it or the next deploy targets the wrong project.
+- The published map starts at **2023-01-01**. The cutoff is `MIN_START_TS` in
+  `scripts/publish/refresh.ts` and applies to that deployment only; local builds and the BYO
+  deployment keep the full history. Pre-cutoff activities are dropped, not carried as prior
+  ground, so the two deployments legitimately report different unique mileage for the same
+  ground. `current.json` records the cutoff, so changing it forces a rebuild on the next run.
 - Never point the publish project at the BYO project (`groundcovermap`) or share stores between
   them. They have deliberately opposite CSPs.
 

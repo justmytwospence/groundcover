@@ -485,6 +485,14 @@ does not. The rebuild itself measures 5.9 s at 109 MB peak, so I/O is the only r
 refresh (section 4.2), so once seeded, the cloud owns it and `npm run sync` on the laptop stops
 working. That is the intended end state, not a regression.
 
+**The published map is truncated to 2023-01-01 and later.** The cutoff is `MIN_START_TS` in
+`scripts/publish/refresh.ts`, deliberately not a `packages/ledger` parameter: it must not touch
+`npm run build:ledger` or the BYO deployment, both of which stay whole-history. Pre-cutoff
+activities are dropped outright rather than kept as prior ground, so ground first covered before
+2023 counts as virgin the next time it is covered. The pointer records the cutoff it was built
+with, so changing it republishes on the next run rather than waiting for a day with new
+activities.
+
 Artifacts are published under `builds/<buildId>/` and are immutable, so they cache for a month;
 only the small `current.json` pointer is overwritten, and it alone carries a short TTL. The
 previous build is deleted only after the pointer flip, so a reader mid-fetch is never orphaned.
