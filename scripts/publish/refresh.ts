@@ -14,14 +14,9 @@
  * Token values are never logged, including in error messages.
  */
 
-import { gunzipSync, gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from 'node:zlib';
 
-import {
-  buildLedger,
-  DEFAULT_PARAMS,
-  sportGroupOf,
-  type LedgerInput,
-} from "@um/ledger";
+import { buildLedger, DEFAULT_PARAMS, sportGroupOf, type LedgerInput } from '@um/ledger';
 import {
   RateLimitError,
   StravaHttpError,
@@ -31,15 +26,9 @@ import {
   parseSummaryActivity,
   stravaGet,
   type StreamSet,
-} from "@um/strava";
+} from '@um/strava';
 
-import {
-  decodePack,
-  encodePack,
-  shardFor,
-  shardPath,
-  type PackEntry,
-} from "./pack.js";
+import { decodePack, encodePack, shardFor, shardPath, type PackEntry } from './pack.js';
 import {
   CURRENT_PATH,
   SUMMARIES_PATH,
@@ -57,7 +46,7 @@ import {
   type StoredSummary,
   type StoredToken,
   type SummariesFile,
-} from "./store.js";
+} from './store.js';
 
 /**
  * Stop fetching streams here and go rebuild with what we have. Chosen against the 300 s cap:
@@ -92,7 +81,7 @@ interface StreamCache {
 
 /** Identical to scripts/sync.ts: the summary-only subset of docs/algorithm.md section 3.1. */
 function preFetchSkip(a: StoredSummary & { sportType: string }): boolean {
-  return a.trainer || a.manual || a.sportType.startsWith("Virtual");
+  return a.trainer || a.manual || a.sportType.startsWith('Virtual');
 }
 
 function toStored(raw: unknown): StoredSummary | null {
@@ -129,9 +118,7 @@ export interface RefreshResult {
   note?: string;
 }
 
-export async function runRefresh(
-  log: (s: string) => void = () => {},
-): Promise<RefreshResult> {
+export async function runRefresh(log: (s: string) => void = () => {}): Promise<RefreshResult> {
   const t0 = Date.now();
   const priv = privateStore();
   const pub = publicStore();
@@ -139,16 +126,14 @@ export async function runRefresh(
   // ---- token ---------------------------------------------------------------------------
   const stored = await getJson<StoredToken>(priv, TOKEN_PATH);
   if (!stored?.refreshToken) {
-    throw new Error(
-      `${TOKEN_PATH} is missing or empty -- run \`npm run publish:seed\` first`,
-    );
+    throw new Error(`${TOKEN_PATH} is missing or empty -- run \`npm run publish:seed\` first`);
   }
   const creds = {
-    clientId: process.env.STRAVA_CLIENT_ID ?? "",
-    clientSecret: process.env.STRAVA_CLIENT_SECRET ?? "",
+    clientId: process.env.STRAVA_CLIENT_ID ?? '',
+    clientSecret: process.env.STRAVA_CLIENT_SECRET ?? '',
   };
   if (!creds.clientId || !creds.clientSecret) {
-    throw new Error("STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET are not set");
+    throw new Error('STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET are not set');
   }
 
   const minted = await mintAccessToken(creds, stored);
@@ -158,34 +143,22 @@ export async function runRefresh(
   if (minted.rotated) {
     await putJson(priv, TOKEN_PATH, {
       refreshToken: minted.refreshToken,
-      ...(stored.athleteId !== undefined
-        ? { athleteId: stored.athleteId }
-        : {}),
+      ...(stored.athleteId !== undefined ? { athleteId: stored.athleteId } : {}),
       rotatedAt: new Date().toISOString(),
     } satisfies StoredToken);
-    log("refresh token rotated and persisted");
+    log('refresh token rotated and persisted');
   }
   const accessToken = minted.accessToken;
 
   // ---- summaries -----------------------------------------------------------------------
-  const summariesFile = (await getJson<SummariesFile>(
-    priv,
-    SUMMARIES_PATH,
-  )) ?? { activities: {} };
+  const summariesFile = (await getJson<SummariesFile>(priv, SUMMARIES_PATH)) ?? { activities: {} };
   const known = summariesFile.activities;
   const before = Object.keys(known).length;
 
-  const latest = Object.values(known).reduce(
-    (max, a) => Math.max(max, a.startTs),
-    0,
-  );
+  const latest = Object.values(known).reduce((max, a) => Math.max(max, a.startTs), 0);
   const after = latest > 0 ? latest - AFTER_MARGIN_S : undefined;
 
-  for await (const page of pageActivities({
-    accessToken,
-    after,
-    pace: PACE_MS,
-  })) {
+  for await (const page of pageActivities({ accessToken, after, pace: PACE_MS })) {
     for (const raw of page) {
       const s = toStored(raw);
       if (s) known[String(s.id)] = s;
@@ -195,7 +168,7 @@ export async function runRefresh(
   log(`${Object.keys(known).length} activities known (${newActivities} new)`);
 
   // ---- stream corpus -------------------------------------------------------------------
-  const shardPaths = await listPaths(priv, "streams/");
+  const shardPaths = await listPaths(priv, 'streams/');
   const shards = new Map<string, Map<number, Uint8Array>>();
   let corpusBytes = 0;
 
@@ -203,7 +176,7 @@ export async function runRefresh(
     const bytes = await getBlob(priv, path);
     if (!bytes) continue;
     corpusBytes += bytes.length;
-    const shard = path.slice("streams/".length, -".pack".length);
+    const shard = path.slice('streams/'.length, -'.pack'.length);
     const map = new Map<number, Uint8Array>();
     for (const e of decodePack(bytes)) map.set(e.id, e.gz);
     shards.set(shard, map);
@@ -212,9 +185,7 @@ export async function runRefresh(
     for (const m of shards.values()) if (m.has(id)) return true;
     return false;
   };
-  log(
-    `${shardPaths.length} shards, ${(corpusBytes / 1e6).toFixed(1)} MB of GPS loaded`,
-  );
+  log(`${shardPaths.length} shards, ${(corpusBytes / 1e6).toFixed(1)} MB of GPS loaded`);
 
   // ---- fetch what is missing -----------------------------------------------------------
   const wanted = Object.values(known)
@@ -229,9 +200,7 @@ export async function runRefresh(
   for (let i = 0; i < wanted.length; i++) {
     if (Date.now() - t0 > FETCH_DEADLINE_MS) {
       remaining = wanted.length - i;
-      log(
-        `fetch deadline reached; ${remaining} streams deferred to the next run`,
-      );
+      log(`fetch deadline reached; ${remaining} streams deferred to the next run`);
       break;
     }
     const a = wanted[i];
@@ -241,7 +210,7 @@ export async function runRefresh(
     try {
       const { data } = await stravaGet<unknown>(`/activities/${a.id}/streams`, {
         accessToken,
-        query: { keys: "latlng,time,altitude", key_by_type: "true" },
+        query: { keys: 'latlng,time,altitude', key_by_type: 'true' },
       });
       set = StreamSetSchema.parse(data);
     } catch (err) {
@@ -278,28 +247,20 @@ export async function runRefresh(
       bucket = new Map();
       shards.set(shard, bucket);
     }
-    bucket.set(
-      a.id,
-      new Uint8Array(gzipSync(Buffer.from(JSON.stringify(cache)))),
-    );
+    bucket.set(a.id, new Uint8Array(gzipSync(Buffer.from(JSON.stringify(cache)))));
     dirtyShards.add(shard);
     fetched++;
   }
-  log(
-    `fetched ${fetched} streams` +
-      (noStreams > 0 ? `, ${noStreams} had none` : ""),
-  );
+  log(`fetched ${fetched} streams` + (noStreams > 0 ? `, ${noStreams} had none` : ''));
 
   // ---- persist the corpus before rebuilding ----------------------------------------------
   // Written first, and only the shards that changed. A rebuild that fails after this point
   // still leaves the GPS banked, so tomorrow's run does not re-spend the API budget.
   for (const shard of [...dirtyShards].sort()) {
     const map = shards.get(shard)!;
-    const entries: PackEntry[] = [...map]
-      .sort((a, b) => a[0] - b[0])
-      .map(([id, gz]) => ({ id, gz }));
+    const entries: PackEntry[] = [...map].sort((a, b) => a[0] - b[0]).map(([id, gz]) => ({ id, gz }));
     await putBlob(priv, shardPath(shard), encodePack(entries), {
-      contentType: "application/octet-stream",
+      contentType: 'application/octet-stream',
     });
   }
   if (dirtyShards.size > 0 || newActivities > 0) {
@@ -309,37 +270,27 @@ export async function runRefresh(
   // Nothing new and something already published: stop before spending a 58 MB upload on an
   // artifact identical to the one already live.
   const current = await getJson<CurrentPointer>(pub, CURRENT_PATH);
-  const currentPointerUrl = current
-    ? ((await blobUrl(pub, CURRENT_PATH)) ?? undefined)
-    : undefined;
-  if (
-    fetched === 0 &&
-    newActivities === 0 &&
-    current &&
-    current.minStartTs === MIN_START_TS
-  ) {
+  const currentPointerUrl = current ? ((await blobUrl(pub, CURRENT_PATH)) ?? undefined) : undefined;
+  if (fetched === 0 && newActivities === 0 && current && current.minStartTs === MIN_START_TS) {
     return {
       ok: true,
       newActivities: 0,
       streamsFetched: 0,
       streamsRemaining: remaining,
       activitiesBuilt:
-        current.manifest && typeof current.manifest === "object"
-          ? ((current.manifest as { counts?: { activities?: number } }).counts
-              ?.activities ?? 0)
+        current.manifest && typeof current.manifest === 'object'
+          ? ((current.manifest as { counts?: { activities?: number } }).counts?.activities ?? 0)
           : 0,
       buildId: current.buildId,
       pointerUrl: currentPointerUrl,
       elapsedMs: Date.now() - t0,
-      note: "nothing new; kept the current build",
+      note: 'nothing new; kept the current build',
     };
   }
 
   // ---- rebuild -------------------------------------------------------------------------
   const input: LedgerInput[] = [];
-  for (const s of Object.values(known).sort(
-    (a, b) => a.startTs - b.startTs || a.id - b.id,
-  )) {
+  for (const s of Object.values(known).sort((a, b) => a.startTs - b.startTs || a.id - b.id)) {
     if (beforeCutoff(s)) continue;
     let gz: Uint8Array | undefined;
     for (const m of shards.values()) {
@@ -352,9 +303,7 @@ export async function runRefresh(
     if (!gz) continue;
     let st: StreamCache;
     try {
-      st = JSON.parse(
-        gunzipSync(Buffer.from(gz)).toString("utf8"),
-      ) as StreamCache;
+      st = JSON.parse(gunzipSync(Buffer.from(gz)).toString('utf8')) as StreamCache;
     } catch {
       continue;
     }
@@ -379,36 +328,19 @@ export async function runRefresh(
   const out = buildLedger(input, DEFAULT_PARAMS);
   const builtAt = new Date().toISOString();
   out.manifest.builtAt = builtAt;
-  log(
-    `built ${out.manifest.counts.sites} sites from ${input.length} activities in ${((Date.now() - tBuild) / 1000).toFixed(1)}s`,
-  );
+  log(`built ${out.manifest.counts.sites} sites from ${input.length} activities in ${((Date.now() - tBuild) / 1000).toFixed(1)}s`);
 
   // ---- publish -------------------------------------------------------------------------
   // Versioned by build, so every artifact URL is immutable and can be cached for a month. Only
   // the small pointer is ever overwritten, which is why it is the only one with a short TTL.
-  const buildId = builtAt.replace(/[:.]/g, "-");
+  const buildId = builtAt.replace(/[:.]/g, '-');
   const prefix = `builds/${buildId}`;
-  const bin = { contentType: "application/octet-stream" };
+  const bin = { contentType: 'application/octet-stream' };
 
   const files = {
-    sites: await putBlob(
-      pub,
-      `${prefix}/sites.bin`,
-      new Uint8Array(out.sites),
-      bin,
-    ),
-    touches: await putBlob(
-      pub,
-      `${prefix}/touches.bin`,
-      new Uint8Array(out.touches),
-      bin,
-    ),
-    tracks: await putBlob(
-      pub,
-      `${prefix}/tracks.bin`,
-      new Uint8Array(out.tracks),
-      bin,
-    ),
+    sites: await putBlob(pub, `${prefix}/sites.bin`, new Uint8Array(out.sites), bin),
+    touches: await putBlob(pub, `${prefix}/touches.bin`, new Uint8Array(out.touches), bin),
+    tracks: await putBlob(pub, `${prefix}/tracks.bin`, new Uint8Array(out.tracks), bin),
     activities: await putJson(pub, `${prefix}/activities.json`, out.activities),
   };
 
@@ -421,17 +353,13 @@ export async function runRefresh(
   };
   // 60 s is the SDK floor. The map moves once a day, so a minute of CDN staleness after a
   // build is invisible, and it keeps the pointer from being served from a month-old cache.
-  const pointerUrl = await putJson(pub, CURRENT_PATH, pointer, {
-    cacheControlMaxAge: 60,
-  });
+  const pointerUrl = await putJson(pub, CURRENT_PATH, pointer, { cacheControlMaxAge: 60 });
   log(`published ${buildId}`);
 
   // ---- retire older builds --------------------------------------------------------------
   // After the pointer flip, never before: a reader that already has the pointer must still be
   // able to finish fetching what it names.
-  const stale = (await listPaths(pub, "builds/")).filter(
-    (p) => !p.startsWith(`${prefix}/`),
-  );
+  const stale = (await listPaths(pub, 'builds/')).filter((p) => !p.startsWith(`${prefix}/`));
   if (stale.length > 0) {
     await delPaths(pub, stale);
     log(`retired ${stale.length} objects from previous builds`);

@@ -227,6 +227,19 @@ button.ghost {
   font-size: 12px;
 }
 
+/* The share link. Monospace and small: it is there to be copied, not read. */
+.share-url {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--inset-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
 button.ghost:hover {
   background: var(--hover-bg);
   color: var(--text-primary);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { xToLng, yToLat } from '@um/ledger';
+import { xToLng, yToLat, type ActivitySummary } from '@um/ledger';
 import { MapView, type MapHandles } from './map/MapView.js';
 import { FilterPanel } from './panels/FilterPanel.js';
 import { StatsCard } from './panels/StatsCard.js';
@@ -11,12 +11,17 @@ import { AccountPanel } from './panels/AccountPanel.js';
 import { ImportReport } from './panels/ImportReport.js';
 import { SmallScreen } from './panels/SmallScreen.js';
 import { ThemeToggle } from './panels/ThemeToggle.js';
+import { SharePanel } from './panels/SharePanel.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
-import { IS_PUBLISHED_BUILD } from './worker/artifactSource.js';
-import { PublishedFooter } from './panels/PublishedFooter.js';
-import { hydrateFromHash, readMapFromHash, startHashSync, useStore } from './state/store.js';
+import {
+  hydrateFromHash,
+  readInitialView,
+  startHashListener,
+  startHashSync,
+  useStore,
+} from './state/store.js';
 import type { QueryRequest, SiteInfoResult, TracksMessage, WorkerOut } from './worker/protocol.js';
 
 /**
@@ -72,6 +77,7 @@ export function App() {
   /** Lets an already-rendering map reach the connect flow on demand -- the local pipeline
    *  produces a "ready" map in a browser that has never connected to anything. */
   const [showConnect, setShowConnect] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   /** Whether the live preview has already been started for the sync currently running. */
   const previewStarted = useRef(false);
   /** The most work this sync ever had left, which is what decides if it is worth previewing. */
@@ -208,16 +214,45 @@ export function App() {
     });
   }, []);
 
+  /**
+   * Bounding box of the activities inside a window, or null when the window holds none.
+   *
+   * Shared by "fit to selection" and by the initial framing of a link that carries a time frame
+   * but no camera, so both mean the same thing by "the selection".
+   */
+  const selectionBounds = useCallback(
+    (t0: number, t1: number, groups: number[], activities: ActivitySummary[]): Bounds | null => {
+      const groupSet = new Set(groups);
+      let minLng = Infinity;
+      let minLat = Infinity;
+      let maxLng = -Infinity;
+      let maxLat = -Infinity;
+      for (const a of activities) {
+        if (a.startTs < t0 || a.startTs > t1 || !groupSet.has(a.group)) continue;
+        if (a.bbox[0] < minLng) minLng = a.bbox[0];
+        if (a.bbox[1] < minLat) minLat = a.bbox[1];
+        if (a.bbox[2] > maxLng) maxLng = a.bbox[2];
+        if (a.bbox[3] > maxLat) maxLat = a.bbox[3];
+      }
+      return Number.isFinite(minLng) ? [minLng, minLat, maxLng, maxLat] : null;
+    },
+    [],
+  );
+
   /** Hand the geometry to the map once both sides are ready, whichever arrives second. */
   const applyGeometry = useCallback(() => {
     const g = readyGeom.current;
     const m = mapRef.current;
     if (!g || !m) return;
     m.setGeometry(g.src, g.dst, g.n);
-    // Only fit the data when the URL did not already carry a view. A bookmarked or shared
-    // link must land where it says it lands (SPEC.md section 6.8).
-    if (!readMapFromHash()) m.flyToBounds(g.bounds);
-  }, []);
+    // A link naming a camera is already there -- the map was built at it -- and flying anywhere
+    // now would discard what the link said (SPEC.md section 6.8).
+    if (readInitialView()) return;
+    // Otherwise frame what the link is about: a shared time frame gets the ground that window
+    // covers, which is the extent the animation plays over. No window means everything.
+    const s = useStore.getState();
+    m.flyToBounds(selectionBounds(s.t0, s.t1, s.groups, s.activities) ?? g.bounds);
+  }, [selectionBounds]);
 
   // ---- querying ------------------------------------------------------------------------
   const runQuery = useCallback(() => {
@@ -271,7 +306,16 @@ export function App() {
     runQuery,
   ]);
 
-  useEffect(() => startHashSync(() => mapRef.current?.getMapState() ?? null), []);
+  useEffect(() => startHashSync(() => mapRef.current?.getBounds() ?? null), []);
+
+  // Pasting a link into this tab's address bar should move the map, not just the address.
+  useEffect(
+    () =>
+      startHashListener((v) => {
+        if (v.kind === 'bounds') mapRef.current?.flyToBounds(v.bounds);
+      }),
+    [],
+  );
 
   /**
    * Replay the history on a loop while a big backfill runs.
@@ -356,20 +400,8 @@ export function App() {
     if (fitKey.current === key) return;
     fitKey.current = key;
 
-    const groupSet = new Set(store.groups);
-    let minLng = Infinity;
-    let minLat = Infinity;
-    let maxLng = -Infinity;
-    let maxLat = -Infinity;
-    for (const a of store.activities) {
-      if (a.startTs < store.t0 || a.startTs > upper || !groupSet.has(a.group)) continue;
-      if (a.bbox[0] < minLng) minLng = a.bbox[0];
-      if (a.bbox[1] < minLat) minLat = a.bbox[1];
-      if (a.bbox[2] > maxLng) maxLng = a.bbox[2];
-      if (a.bbox[3] > maxLat) maxLat = a.bbox[3];
-    }
-    if (!Number.isFinite(minLng)) return;
-    mapRef.current?.fitIfNeeded([minLng, minLat, maxLng, maxLat]);
+    const bb = selectionBounds(store.t0, upper, store.groups, store.activities);
+    if (bb) mapRef.current?.fitIfNeeded(bb);
   }, [
     store.load,
     store.fitToSelection,
@@ -381,6 +413,7 @@ export function App() {
     store.replayReverse,
     store.groups,
     store.activities,
+    selectionBounds,
     // The map can finish loading after the selection settles; without this the one chance to
     // fit is burned while mapRef is still null and the selection is never framed.
     mapReady,
@@ -476,25 +509,19 @@ export function App() {
   // is true both for a returning visitor and for local development against files built by the
   // Node pipeline, where nothing was ever "connected" in this browser at all. Only once we know
   // there is nothing to draw does the question of connecting arise.
-  // No `progress > 0` guard. In the BYO build that byte counter is fed only by the dev-only
-  // HTTP artifact source, so the card it gated was unreachable for every real visitor -- who
-  // instead got an unbranded dark rectangle for however long it took to read tens of megabytes
-  // out of IndexedDB and rebuild the geometry. The publish build does feed it, over the network.
+  // No `progress > 0` guard. That byte counter is fed only by the dev-only HTTP artifact
+  // source, which production drops entirely, so the card it gated was unreachable for every
+  // real visitor -- who instead got an unbranded dark rectangle for however long it took to
+  // read tens of megabytes out of IndexedDB and rebuild the geometry.
   if (conn.state === 'checking' || store.load === 'loading') {
     return (
       <>
         <ThemeToggle floating />
         <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>
-            {IS_PUBLISHED_BUILD ? 'Loading the map' : 'Loading your map'}
-          </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>Loading your map</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>
-            {progress > 0
-              ? `${(progress / 1e6).toFixed(1)} MB`
-              : IS_PUBLISHED_BUILD
-                ? 'Fetching coverage'
-                : 'Reading it back out of this browser'}
+            {progress > 0 ? `${(progress / 1e6).toFixed(1)} MB` : 'Reading it back out of this browser'}
           </div>
         </div>
         </div>
@@ -509,28 +536,22 @@ export function App() {
         <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto' }}>
           <h1 className="connect-title" style={{ fontSize: 24 }}>
-            {IS_PUBLISHED_BUILD ? 'This map could not be loaded' : 'Your stored map could not be read'}
+            Your stored map could not be read
           </h1>
-          {/* Nothing a visitor to the published map can do about it, so do not offer them a
-              control that spends their time and cannot help. */}
           <p className="connect-lede">
-            {store.loadError}
-            {IS_PUBLISHED_BUILD
-              ? ' It is rebuilt nightly; try again shortly.'
-              : ' Rebuilding from the activities already downloaded usually fixes it, and costs no Strava requests.'}
+            {store.loadError} Rebuilding from the activities already downloaded usually fixes it,
+            and costs no Strava requests.
           </p>
-          {!IS_PUBLISHED_BUILD && (
-            <button className="ghost" onClick={conn.rebuild}>
-              Rebuild
-            </button>
-          )}
+          <button className="ghost" onClick={conn.rebuild}>
+            Rebuild
+          </button>
         </div>
         </div>
       </>
     );
   }
 
-  if (!IS_PUBLISHED_BUILD && (showConnect || (store.load !== 'ready' && conn.state === 'disconnected'))) {
+  if (showConnect || (store.load !== 'ready' && conn.state === 'disconnected')) {
     return (
       <>
         <ThemeToggle floating />
@@ -594,7 +615,7 @@ export function App() {
 
       {/* An empty map with nothing running is a dead end: the sync stopped before it produced
           anything, or an earlier visit was interrupted. Say so and offer the way forward. */}
-      {!IS_PUBLISHED_BUILD && store.load === 'no-artifacts' && !conn.sync && !conn.building && (
+      {store.load === 'no-artifacts' && !conn.sync && !conn.building && (
         <div className="panel" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 320 }}>
           <h2>Nothing here yet</h2>
           <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 12 }}>
@@ -632,18 +653,28 @@ export function App() {
           <div className="left-rail">
             <div className="rail-row">
               <ThemeToggle />
-              {IS_PUBLISHED_BUILD ? (
-                <PublishedFooter builtAt={store.manifest?.builtAt} />
-              ) : (
-                <AccountPanel
-                  busy={conn.sync !== null || conn.building}
-                  connected={conn.state === 'connected'}
-                  onSync={conn.startSync}
-                  onConnect={() => setShowConnect(true)}
-                  onDisconnect={conn.disconnect}
-                />
-              )}
+              <button
+                className="ghost"
+                aria-pressed={showShare}
+                onClick={() => setShowShare((v) => !v)}
+                title="Copy a link to this view"
+              >
+                Share
+              </button>
+              <AccountPanel
+                busy={conn.sync !== null || conn.building}
+                connected={conn.state === 'connected'}
+                onSync={conn.startSync}
+                onConnect={() => setShowConnect(true)}
+                onDisconnect={conn.disconnect}
+              />
             </div>
+            {showShare && (
+              <SharePanel
+                getViewBounds={() => mapRef.current?.getBounds() ?? null}
+                onClose={() => setShowShare(false)}
+              />
+            )}
             {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
             {conn.buildError && (
               <div className="panel" style={{ width: 290 }}>

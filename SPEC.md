@@ -908,10 +908,32 @@ cases; the tool should have already told them about these. Do not hide them.
 
 ### 6.8 URL state
 
-The full view state serializes into the URL hash so a view is reloadable and bookmarkable:
-window start and end, selected sport groups, map mode, viewport-filter flag, units, map
-center/zoom/bearing/pitch, and panel collapse states. Read on mount, write on change
-(debounced 250 ms, using `replaceState` so the back button is not spammed).
+The selection serializes into the URL hash so a view is reloadable, bookmarkable and
+shareable: window start and end (`t0`/`t1`), selected sport groups, map mode, viewport-filter
+flag, units, and the flag options. Read on mount, write on change (debounced 250 ms, using
+`replaceState` so the back button is not spammed), and re-read on `hashchange` so pasting a
+link into a tab that is already open moves the map rather than just the address.
+
+**The camera is not in the hash by default, and that is deliberate.** It used to be, rewritten
+on every pan as `map=lng,lat,zoom`, which meant every link anyone copied out of the address bar
+silently pinned the sharer's camera onto the recipient's differently-shaped screen. So:
+
+| | where | effect |
+|---|---|---|
+| no camera | the default | the map fits the shared time frame — the ground the animation covers |
+| `b=minLng,minLat,maxLng,maxLat` | written only by the share panel, on request | opens at exactly that extent |
+| `map=lng,lat,zoom` | legacy, read only | honoured so links shared before `b=` still land where they say |
+| current position | `sessionStorage` | survives a reload of this tab without travelling in a link |
+
+An extent rather than a centre and zoom, because an extent is what survives being opened
+somewhere else: the same centre and zoom frames more ground on a wide monitor than on a phone,
+so the one thing the sharer was pointing at is the thing a centre fails to preserve.
+
+`t0`/`t1` are unix seconds when written, and either seconds or an ISO date when read: a shared
+window is exact to the second, and a hand-composed one can say `t0=2023-01-01`. A bare date is
+midnight UTC, matching `startTs`. Everything parsed out of the hash is validated and clamped to
+the data the build actually holds — it is editable text arriving from someone else's paste, and
+one `NaN` reaching `t0` would blank the map with no error anywhere.
 
 ---
 

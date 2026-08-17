@@ -4,6 +4,10 @@ import { create } from 'zustand';
 import type { ActivitySummary, Manifest } from '@um/ledger';
 import { initialChoice, resolveTheme, type Theme, type ThemeChoice } from '../lib/theme.js';
 import type { MapMode, QueryExtras } from '../worker/protocol.js';
+import { parseHash, type InitialView } from './hash.js';
+
+export type { InitialView };
+export { parseHash };
 
 export type LoadState = 'loading' | 'ready' | 'no-artifacts' | 'format-mismatch' | 'failed';
 
@@ -14,7 +18,7 @@ export interface Stats {
   activityCount: number;
 }
 
-interface State {
+export interface State {
   load: LoadState;
   /** What is on screen. */
   theme: Theme;
@@ -92,30 +96,21 @@ interface State {
 
 const DAY = 86400;
 
-function readHash(): Partial<State> {
-  const h = new URLSearchParams(location.hash.slice(1));
-  const out: Partial<State> = {};
-  const num = (k: string) => {
-    const v = h.get(k);
-    return v === null ? undefined : Number(v);
-  };
-  const t0 = num('t0');
-  const t1 = num('t1');
-  if (t0 !== undefined) out.t0 = t0;
-  if (t1 !== undefined) out.t1 = t1;
-  const g = h.get('g');
-  if (g) out.groups = g.split(',').map(Number).filter(Number.isFinite);
-  const m = h.get('m');
-  if (m === 'heatmap' || m === 'exploration') out.mode = m;
-  if (h.get('vp') === '1') out.viewportFilter = true;
-  if (h.get('fit') === '1') out.fitToSelection = true;
-  if (h.get('fitplay') === '1') out.fitWhilePlaying = true;
-  if (h.get('noskip') === '1') out.skipEmptyDays = false;
-  if (h.get('inview') === '1') out.skipOutsideBounds = true;
-  const u = h.get('u');
-  if (u === 'mi' || u === 'km') out.units = u;
-  if (h.get('d') === '1') out.drawerOpen = true;
-  return out;
+/** The selection half of the hash: everything except the camera. */
+function writeSelection(s: State): URLSearchParams {
+  const h = new URLSearchParams();
+  h.set('t0', String(Math.round(s.t0)));
+  h.set('t1', String(Math.round(s.t1)));
+  h.set('g', s.groups.join(','));
+  h.set('m', s.mode);
+  if (s.viewportFilter) h.set('vp', '1');
+  if (s.fitToSelection) h.set('fit', '1');
+  if (s.fitWhilePlaying) h.set('fitplay', '1');
+  if (!s.skipEmptyDays) h.set('noskip', '1');
+  if (s.skipOutsideBounds) h.set('inview', '1');
+  h.set('u', s.units);
+  if (s.drawerOpen) h.set('d', '1');
+  return h;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -175,44 +170,82 @@ if (import.meta.env.DEV) {
 /** Apply URL state once the time range is known. */
 export function hydrateFromHash(minTs: number, maxTs: number): void {
   const s = useStore.getState();
-  const fromHash = readHash();
+  const { view } = parseHash(location.hash);
+  // Clamped to the data this build actually holds. The published map is truncated (SPEC.md
+  // section 4.6), so a link shared before that names a window holding nothing; landing on the
+  // nearest real window beats landing on a blank map with no explanation.
+  const hi = maxTs + DAY;
+  const clamp = (v: number) => Math.min(Math.max(v, minTs), hi);
   useStore.setState({
     minTs,
     maxTs,
-    t0: fromHash.t0 ?? minTs,
-    t1: fromHash.t1 ?? maxTs + DAY,
-    groups: fromHash.groups ?? s.groups,
-    mode: fromHash.mode ?? s.mode,
-    viewportFilter: fromHash.viewportFilter ?? s.viewportFilter,
-    fitToSelection: fromHash.fitToSelection ?? s.fitToSelection,
-    fitWhilePlaying: fromHash.fitWhilePlaying ?? s.fitWhilePlaying,
-    skipEmptyDays: fromHash.skipEmptyDays ?? s.skipEmptyDays,
-    skipOutsideBounds: fromHash.skipOutsideBounds ?? s.skipOutsideBounds,
-    units: fromHash.units ?? s.units,
-    drawerOpen: fromHash.drawerOpen ?? s.drawerOpen,
+    t0: view.t0 !== undefined ? clamp(view.t0) : minTs,
+    t1: view.t1 !== undefined ? clamp(view.t1) : hi,
+    groups: view.groups ?? s.groups,
+    mode: view.mode ?? s.mode,
+    viewportFilter: view.viewportFilter ?? s.viewportFilter,
+    fitToSelection: view.fitToSelection ?? s.fitToSelection,
+    fitWhilePlaying: view.fitWhilePlaying ?? s.fitWhilePlaying,
+    skipEmptyDays: view.skipEmptyDays ?? s.skipEmptyDays,
+    skipOutsideBounds: view.skipOutsideBounds ?? s.skipOutsideBounds,
+    units: view.units ?? s.units,
+    drawerOpen: view.drawerOpen ?? s.drawerOpen,
   });
 }
 
+/**
+ * Where the map was, kept per tab rather than in the URL.
+ *
+ * The address bar used to carry `map=lng,lat,zoom`, rewritten on every pan, so every link
+ * anyone copied out of it silently pinned the sharer's camera onto the recipient. The position
+ * is still worth keeping across a reload, so it lives here instead: same tab, not the link.
+ * Sharing a view is now something you ask for, in the share panel.
+ */
+const CAMERA_KEY = 'um.camera';
+
+function saveCamera(b: [number, number, number, number]): void {
+  try {
+    sessionStorage.setItem(CAMERA_KEY, b.map((v) => v.toFixed(5)).join(','));
+  } catch {
+    // A private-mode storage refusal is not worth breaking the map over.
+  }
+}
+
+function loadCamera(): InitialView | null {
+  try {
+    const b = sessionStorage.getItem(CAMERA_KEY)?.split(',').map(Number);
+    if (!b || b.length !== 4 || !b.every(Number.isFinite)) return null;
+    return { kind: 'bounds', bounds: [b[0], b[1], b[2], b[3]] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The link to hand someone else.
+ *
+ * `includeView: false` -- the default -- deliberately omits the camera, so the recipient's map
+ * fits the shared time frame: they see the ground that window covers, framed for their own
+ * screen. `includeView: true` pins the exact extent on screen now, for when the framing is
+ * itself the point.
+ */
+export function buildShareUrl(
+  includeView: boolean,
+  viewBounds: [number, number, number, number] | null,
+): string {
+  const h = writeSelection(useStore.getState());
+  if (includeView && viewBounds) h.set('b', viewBounds.map((v) => v.toFixed(4)).join(','));
+  return `${location.origin}${location.pathname}${location.search}#${h.toString()}`;
+}
+
 let hashTimer: number | undefined;
-export function startHashSync(getMapState: () => { c: [number, number]; z: number } | null): () => void {
+export function startHashSync(getViewBounds: () => [number, number, number, number] | null): () => void {
   const write = () => {
     const s = useStore.getState();
     if (s.load !== 'ready') return;
-    const h = new URLSearchParams();
-    h.set('t0', String(Math.round(s.t0)));
-    h.set('t1', String(Math.round(s.t1)));
-    h.set('g', s.groups.join(','));
-    h.set('m', s.mode);
-    if (s.viewportFilter) h.set('vp', '1');
-    if (s.fitToSelection) h.set('fit', '1');
-    if (s.fitWhilePlaying) h.set('fitplay', '1');
-    if (!s.skipEmptyDays) h.set('noskip', '1');
-    if (s.skipOutsideBounds) h.set('inview', '1');
-    h.set('u', s.units);
-    if (s.drawerOpen) h.set('d', '1');
-    const mp = getMapState();
-    if (mp) h.set('map', `${mp.c[0].toFixed(4)},${mp.c[1].toFixed(4)},${mp.z.toFixed(2)}`);
-    history.replaceState(null, '', `#${h.toString()}`);
+    history.replaceState(null, '', `#${writeSelection(s).toString()}`);
+    const b = getViewBounds();
+    if (b) saveCamera(b);
   };
   return useStore.subscribe(() => {
     clearTimeout(hashTimer);
@@ -222,20 +255,35 @@ export function startHashSync(getMapState: () => { c: [number, number]; z: numbe
 
 /**
  * Captured ONCE at module load, before the hash writer can touch it. Reading it lazily races
- * the writer: the writer omits `map=` while the map does not yet exist, so a later read would
- * see no saved view and the app would refit to the data, discarding a shared link's position.
+ * the writer, which never emits a camera: a later read would find none and the app would throw
+ * away a shared link's framing.
+ *
+ * Session storage is the fallback, never the priority: a camera named by the link always beats
+ * wherever this tab happened to be looking.
  */
-const INITIAL_MAP = (() => {
-  const h = new URLSearchParams(location.hash.slice(1));
-  const m = h.get('map');
-  if (!m) return null;
-  const [lng, lat, z] = m.split(',').map(Number);
-  if (![lng, lat, z].every(Number.isFinite)) return null;
-  return { center: [lng, lat] as [number, number], zoom: z };
-})();
+const INITIAL_VIEW: InitialView | null = parseHash(location.hash).camera ?? loadCamera();
 
-export function readMapFromHash(): { center: [number, number]; zoom: number } | null {
-  return INITIAL_MAP;
+export function readInitialView(): InitialView | null {
+  return INITIAL_VIEW;
+}
+
+/**
+ * Pasting a link into the address bar of a tab that is already here fires `hashchange` and
+ * nothing else -- no reload, no remount. Without this the address changes and the map does not,
+ * which is indistinguishable from a broken link. Our own debounced writes are recognised by
+ * comparing against what we would have written.
+ */
+export function startHashListener(onCamera: (v: InitialView) => void): () => void {
+  const onChange = () => {
+    const s = useStore.getState();
+    if (s.load !== 'ready') return;
+    if (location.hash.replace(/^#/, '') === writeSelection(s).toString()) return;
+    const { view, camera } = parseHash(location.hash);
+    if (Object.keys(view).length > 0) useStore.setState(view);
+    if (camera) onCamera(camera);
+  };
+  window.addEventListener('hashchange', onChange);
+  return () => window.removeEventListener('hashchange', onChange);
 }
 
 export const M_PER_UNIT = { mi: 1609.344, km: 1000 };
