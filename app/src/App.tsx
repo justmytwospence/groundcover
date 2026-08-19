@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { xToLng, yToLat, type ActivitySummary } from '@um/ledger';
 import { MapView, type MapHandles } from './map/MapView.js';
 import { FilterPanel } from './panels/FilterPanel.js';
@@ -9,8 +9,8 @@ import { SearchBox, type Bounds } from './panels/SearchBox.js';
 import { SitePopup } from './panels/SitePopup.js';
 import { AccountPanel } from './panels/AccountPanel.js';
 import { ImportReport } from './panels/ImportReport.js';
-import { SmallScreen } from './panels/SmallScreen.js';
 import { ThemeToggle } from './panels/ThemeToggle.js';
+import { Sheet, stopHeight, type SheetStop } from './panels/Sheet.js';
 import { SharePanel } from './panels/SharePanel.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
@@ -80,6 +80,9 @@ export function App() {
    *  produces a "ready" map in a browser that has never connected to anything. */
   const [showConnect, setShowConnect] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  /** Phone only: how far the bottom sheet is open, and its live height mid-drag. */
+  const [sheetStop, setSheetStop] = useState<SheetStop>('peek');
+  const [sheetDragH, setSheetDragH] = useState<number | null>(null);
   /** Whether the live preview has already been started for the sync currently running. */
   const previewStarted = useRef(false);
   /** The most work this sync ever had left, which is what decides if it is worth previewing. */
@@ -591,9 +594,22 @@ export function App() {
     );
   }
 
+  const chrome = store.load === 'ready';
+
   return (
-    <>
-      <SmallScreen />
+    // The docking rule lives here: chrome is a grid *sibling* of the map, never a layer over
+    // it, so what the map frames is what the viewer sees. See the header in theme.css.
+    <div
+      className="app-shell"
+      data-chrome={chrome ? 'on' : 'off'}
+      data-drawer={store.drawerOpen ? 'open' : 'closed'}
+      style={
+        {
+          '--sheet-h': `${sheetDragH ?? stopHeight(sheetStop, window.innerHeight)}px`,
+        } as CSSProperties
+      }
+    >
+      <div className="map-pane">
       <MapView
         onReady={(h) => {
           if (mapRef.current === h) return;
@@ -666,78 +682,17 @@ export function App() {
         </div>
       )}
 
+      {store.paramsWarning && store.load === 'ready' && (
+        <div
+          className="panel"
+          style={{ top: 12, left: '50%', transform: 'translateX(-50%)', padding: '8px 14px' }}
+        >
+          <span style={{ color: 'var(--text-secondary)' }}>{store.paramsWarning}</span>
+        </div>
+      )}
+
       {store.load === 'ready' && (
         <>
-          <FilterPanel />
-          <SearchBox onGo={searchGo} />
-          <StatsCard />
-          <Scrubber />
-          {/* One stack rather than three hand-tuned `bottom:` values that drifted into each
-              other and into the scrubber. Bottom-aligned to 150px, matching the legend on the
-              right, and laid out column-reverse so whichever panels are open simply stack. */}
-          <div className="left-rail">
-            <div className="rail-row">
-              <ThemeToggle />
-              <button
-                className="ghost"
-                aria-pressed={showShare}
-                onClick={() => setShowShare((v) => !v)}
-                title="Copy a link to this view"
-              >
-                Share
-              </button>
-              {IS_PUBLISHED_BUILD ? (
-                <PublishedFooter builtAt={store.manifest?.builtAt} />
-              ) : (
-                <AccountPanel
-                  busy={conn.sync !== null || conn.building}
-                  connected={conn.state === 'connected'}
-                  onSync={conn.startSync}
-                  onConnect={() => setShowConnect(true)}
-                  onDisconnect={conn.disconnect}
-                />
-              )}
-            </div>
-            {showShare && (
-              <SharePanel
-                getViewBounds={() => mapRef.current?.getBounds() ?? null}
-                onClose={() => setShowShare(false)}
-              />
-            )}
-            {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
-            {conn.buildError && (
-              <div className="panel" style={{ width: 290 }}>
-                <h2>Your map could not be rebuilt</h2>
-                <div style={{ color: 'var(--text-secondary)', fontSize: 12.5, lineHeight: 1.5 }}>
-                  {conn.buildError}
-                </div>
-                <button className="ghost" onClick={conn.rebuild} style={{ marginTop: 10 }}>
-                  Try again
-                </button>
-              </div>
-            )}
-          </div>
-          {store.drawerOpen && (
-            <StatsDrawer
-              extras={store.extras}
-              onSelectActivity={(idx) => {
-                set({ activeActivity: idx });
-                const a = store.activities[idx];
-                if (a) mapRef.current?.flyToBounds(a.bbox);
-              }}
-              onClose={() => set({ drawerOpen: false })}
-            />
-          )}
-
-          {store.paramsWarning && (
-            <div
-              className="panel"
-              style={{ top: 12, left: '50%', transform: 'translateX(-50%)', padding: '8px 14px' }}
-            >
-              <span style={{ color: 'var(--text-secondary)' }}>{store.paramsWarning}</span>
-            </div>
-          )}
-
           {pinned && (
             <SitePopup
               info={pinned.info}
@@ -811,6 +766,74 @@ export function App() {
           )}
         </>
       )}
-    </>
+      </div>
+
+      {chrome && (
+        <Sheet stop={sheetStop} onStop={setSheetStop} onDragHeight={setSheetDragH}>
+          <SearchBox onGo={searchGo} />
+          <FilterPanel />
+          <StatsCard />
+          {store.drawerOpen && (
+            <StatsDrawer
+              extras={store.extras}
+              onSelectActivity={(idx) => {
+                set({ activeActivity: idx });
+                const a = store.activities[idx];
+                if (a) mapRef.current?.flyToBounds(a.bbox);
+              }}
+              onClose={() => set({ drawerOpen: false })}
+            />
+          )}
+          {showShare && (
+            <SharePanel
+              getViewBounds={() => mapRef.current?.getBounds() ?? null}
+              onClose={() => setShowShare(false)}
+            />
+          )}
+          {conn.report && <ImportReport report={conn.report} onClose={conn.dismissReport} />}
+          {conn.buildError && (
+            <div className="panel">
+              <h2>Your map could not be rebuilt</h2>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 12.5, lineHeight: 1.5 }}>
+                {conn.buildError}
+              </div>
+              <button className="ghost" onClick={conn.rebuild} style={{ marginTop: 10 }}>
+                Try again
+              </button>
+            </div>
+          )}
+          <div className="rail-foot">
+            <div className="rail-row">
+              <ThemeToggle />
+              <button
+                className="ghost"
+                aria-pressed={showShare}
+                onClick={() => setShowShare((v) => !v)}
+                title="Copy a link to this view"
+              >
+                Share
+              </button>
+            </div>
+            {IS_PUBLISHED_BUILD ? (
+              <PublishedFooter builtAt={store.manifest?.builtAt} />
+            ) : (
+              <AccountPanel
+                busy={conn.sync !== null || conn.building}
+                connected={conn.state === 'connected'}
+                onSync={conn.startSync}
+                onConnect={() => setShowConnect(true)}
+                onDisconnect={conn.disconnect}
+              />
+            )}
+          </div>
+        </Sheet>
+      )}
+
+      {chrome && (
+        <div className="transport">
+          <Scrubber />
+        </div>
+      )}
+    </div>
   );
 }

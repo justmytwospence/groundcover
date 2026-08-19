@@ -10,6 +10,10 @@
 :root {
   --map-surface: #1b1f27;
   --panel-bg: rgba(20, 23, 30, 0.82);
+  /* Opaque, because the rail is part of the frame rather than glass over the map.
+     It is what --panel-bg composites to over --map-surface, so docking a panel
+     does not change its colour. */
+  --rail-bg: #14181e;
   --panel-border: rgba(255, 255, 255, 0.1);
   --text-primary: #ffffff;
   --text-secondary: #c3c2b7;
@@ -66,6 +70,7 @@
 :root[data-theme='light'] {
   --map-surface: #f4f4f1;
   --panel-bg: rgba(255, 255, 255, 0.88);
+  --rail-bg: #fdfdfc;
   --panel-border: rgba(0, 0, 0, 0.13);
   --text-primary: #16181d;
   --text-secondary: #454952;
@@ -273,16 +278,12 @@ button.ghost:hover {
  * that sit beside a label.
  * ------------------------------------------------------------------ */
 
+/* Docked in the rail, which widens to hold it. It is the one user-summoned
+   surface big enough to bury the map, so it does not get to float over it. */
 .stats-drawer {
-  top: 12px;
-  bottom: 150px; /* clears the scrubber */
-  left: 12px;
-  width: calc(50vw - 24px);
-  min-width: 300px;
-  max-width: 560px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  min-height: 0;
 }
 
 .stats-drawer-body {
@@ -565,8 +566,8 @@ button.chart-toggle {
 /* ---------------------------------------------------------------------------
    Onboarding and sync.
 
-   These are the only full-page surfaces in the app; everything else is a panel
-   floating over the map. They scroll, because the credentials walkthrough is
+   These are the only full-page surfaces in the app; everything else is docked
+   in the shell around the map. They scroll, because the credentials walkthrough is
    genuinely long and a clipped step four is a support burden.
    --------------------------------------------------------------------------- */
 
@@ -881,12 +882,6 @@ button.chart-toggle {
 
 /* --- import report --- */
 
-.import-report {
-  left: 12px;
-  bottom: 176px;
-  width: 290px;
-}
-
 .import-sum {
   color: var(--text-secondary);
   font-size: 13px;
@@ -936,19 +931,6 @@ button.chart-toggle {
   font-variant-numeric: tabular-nums;
 }
 
-/* Covers the map only; the onboarding pages already reflow to a narrow window fine. */
-.smallscreen {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: var(--map-surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  overflow-y: auto;
-}
-
 /* The paste-the-address step, which is the path that works regardless of what the user's Strava
    app already has in its single callback-domain slot. */
 .connect-paste {
@@ -989,32 +971,104 @@ button.chart-toggle {
   word-break: break-all;
 }
 
-.left-rail {
-  position: absolute;
-  left: 12px;
-  bottom: 150px; /* matches the legend on the right, and clears the scrubber */
-  z-index: 20;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: calc(100vw - 24px);
+/* ---------------------------------------------------------------------------
+   The shell.
+
+   One rule governs this file's layout: PERSISTENT CHROME IS DOCKED AND NEVER
+   OVERLAPS THE MAP. Only transient, user-summoned things -- the site popup, the
+   hover tooltip, the drag-zoom rectangle, the sync ribbon -- are allowed over it.
+
+   That is not taste. Every automatic fit pads by one symmetric FIT_PAD and has
+   no idea what is on top of the map, so anything floating over it silently eats
+   part of what was framed -- and a shared link is a promise about exactly that.
+   Docking makes the map's own cell the visible rectangle, which makes the
+   promise true by construction rather than by a table of per-side insets that
+   would have to be kept in step with every panel width forever.
+   --------------------------------------------------------------------------- */
+
+.app-shell {
+  display: grid;
+  /* dvh, not vh: on iOS Safari 100vh is taller than the window and puts the
+     transport bar behind the URL bar. */
+  height: 100dvh;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    'rail map'
+    'transport transport';
+  /* --rail-w fits the widest rail panel (the share panel, 290). The charts widen
+     it rather than floating over the map, which is the same rule applied to the
+     one surface big enough to bury the map entirely. */
+  --rail-w: 302px;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
-/* .panel is absolutely positioned by default; inside the rail it is a flow item. */
-.left-rail .panel,
-.left-rail .import-report {
+.app-shell[data-drawer='open'] {
+  --rail-w: 560px;
+}
+
+/* Before there is anything to control -- the empty state -- the map gets it all. */
+.app-shell[data-chrome='off'] {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: 'map';
+}
+
+.map-pane {
+  grid-area: map;
+  position: relative;
+  /* The containing block for what legitimately floats over the map. Without it
+     those resolve against the viewport and drift back over the rail. */
+  overflow: hidden;
+}
+
+.rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--panel-border);
+  background: var(--rail-bg);
+  min-height: 0;
+}
+
+.transport {
+  grid-area: transport;
+  border-top: 1px solid var(--panel-border);
+  background: var(--rail-bg);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Docked panels are flow items: no corner anchoring, no shadow, no glass. They
+   are part of the frame now, not floating over it. */
+.rail .panel,
+.transport .panel {
   position: static;
-  left: auto;
-  right: auto;
-  top: auto;
-  bottom: auto;
+  width: auto;
+  max-width: none;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.rail .panel + .panel {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 12px;
 }
 
 .rail-row {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* Same height as the button beside it, so the row has one baseline. */
@@ -1025,6 +1079,21 @@ button.chart-toggle {
   padding-bottom: 0;
   display: inline-flex;
   align-items: center;
+}
+
+/* Pushed to the bottom of the rail: identity and account, below the controls. */
+.rail-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The sheet handle exists only in the mobile layout. */
+.sheet-handle {
+  display: none;
 }
 
 .theme-toggle {
@@ -1054,6 +1123,105 @@ button.chart-toggle {
   justify-content: center;
   font-size: 14px;
   line-height: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Phone layout: the map, the transport, and one sheet for everything else.
+
+   Same DOM, same docking rule. The rail becomes a sheet that slides up from the
+   bottom, and because it is docked rather than floating, the map's cell is still
+   exactly what the viewer can see at any sheet height -- so fits need no
+   mobile-specific code at all.
+   --------------------------------------------------------------------------- */
+
+@media (max-width: 700px) {
+  .app-shell,
+  .app-shell[data-drawer='open'] {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'map'
+      'transport'
+      'rail';
+    /* At the resting "peek" stop this is just the grab handle: the transport row
+       above it stays visible, which is the control people actually came for. */
+    /* The map's row has a floor: a sheet that can push it to nothing makes the map something
+       you have to dismiss the UI to see. */
+    grid-template-rows: minmax(140px, 1fr) auto var(--sheet-h, 34px);
+  }
+
+  .rail {
+    border-right: none;
+    border-top: 1px solid var(--panel-border);
+    padding: 0 12px 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    gap: 10px;
+  }
+
+  /* Sticky so it stays grabbable once the sheet's contents scroll. */
+  .sheet-handle {
+    display: block;
+    /* A drag that starts on the handle otherwise selects its way down the sheet. */
+    user-select: none;
+    -webkit-user-select: none;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    flex: none;
+    width: 100%;
+    height: 34px;
+    border: none;
+    background: var(--rail-bg);
+    cursor: grab;
+    /* Without this the browser claims the drag for scrolling and the sheet
+       jitters between following the finger and not. */
+    touch-action: none;
+  }
+
+  .sheet-handle::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    margin: 15px auto;
+    border-radius: 999px;
+    background: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  .rail-foot {
+    margin-top: 12px;
+  }
+
+  /* The year chips scroll sideways rather than wrapping. Wrapped, they doubled
+     the transport's height on exactly the screens with least of it to give. */
+  .transport .preset-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .transport .preset-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .maplibregl-ctrl-bottom-right {
+    /* Clear of the transport bar, which is now real chrome rather than a panel. */
+    display: none;
+  }
+}
+
+/* Fingers, not cursors: the brush handles are 8px of paint, so they need a
+   transparent pad to be catchable, and hover-only affordances have to go. */
+@media (pointer: coarse) {
+  .scrub-handle::after {
+    content: '';
+    position: absolute;
+    inset: -8px -10px;
+  }
+
+  .chip {
+    padding: 6px 12px;
+  }
 }
 
 /* The modifier-drag zoom rectangle. Hidden until a drag starts; never takes pointer events,

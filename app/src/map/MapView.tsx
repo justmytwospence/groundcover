@@ -31,11 +31,32 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
   ],
 });
 
-/** Padding every automatic fit leaves around what it frames, in pixels. */
-const FIT_PAD = 80;
+/**
+ * How hard to chase a basemap style that failed to load, before settling for a flat background.
+ * The tile host answers with an occasional 503, and one of those should not cost the basemap.
+ */
+const STYLE_RETRIES = 3;
+const STYLE_RETRY_MS = 600;
 
-/** How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline. */
+/**
+ * Padding every automatic fit leaves around what it frames, in pixels.
+ *
+ * 80 when the panels floated over the map, and even that was three to seven times short of the
+ * 222-302 px the rail actually covered. Now that nothing persistent sits on top of the map
+ * (theme.css, "The shell"), this is breathing room and nothing else.
+ */
+const FIT_PAD = 32;
+
+/**
+ * How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline.
+ *
+ * A fingertip covers far more than a mouse cursor points at, and on a phone there is no hover
+ * pass to correct a miss with -- the first tap either lands or reads as a dead map.
+ */
 const PICK_RADIUS = 10;
+const PICK_RADIUS_COARSE = 22;
+const pickRadius = () =>
+  window.matchMedia?.('(pointer: coarse)').matches ? PICK_RADIUS_COARSE : PICK_RADIUS;
 
 /**
  * Every camera move the app makes itself, rather than in response to a drag or a wheel.
@@ -88,6 +109,15 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const deckRef = useRef<Deck | null>(null);
   const geom = useRef<{ src: Float32Array; dst: Float32Array; n: number } | null>(null);
+  /**
+   * The extent the app last asked to be framed, held until the viewer moves the map themselves.
+   *
+   * A fit is computed against the container's size at that instant, and `map.resize()` keeps the
+   * centre and zoom rather than the extent -- so any layout change silently rescopes the framing.
+   * That bites hardest on the very first fit, which lands before the grid has sized the map's
+   * cell: the framed box ended up several zoom levels out, with the routes as specks.
+   */
+  const framed = useRef<[number, number, number, number] | null>(null);
   const colorsRef = useRef<Uint8Array | null>(null);
   const colorVersion = useRef(0);
   const activePath = useRef<Array<[number, number]> | null>(null);
@@ -163,11 +193,47 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       attributionControl: { compact: true },
     });
     mapRef.current = map;
+    if (saved?.kind === 'bounds') framed.current = saved.bounds;
+    if (import.meta.env.DEV) {
+      // Dev-only handle, matching __umStore in state/store.ts: the basemap is loaded from a
+      // third-party host and its failures are only diagnosable from a console.
+      (window as unknown as Record<string, unknown>).__umMap = map;
+    }
 
+    // Two fingers on a phone rotate and pitch by default. `getViewport` honours a rotated map,
+    // so an accidental twist silently widens the viewport filter and moves the numbers in the
+    // stats panel -- a change nobody asked for and nobody can see the cause of. Zoom is the
+    // only two-finger gesture this map has any use for.
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
+    map.touchPitch.disable();
+
+    // A missing basemap must not take the coverage layer down with it -- but only the style
+    // document failing to arrive justifies replacing it with a blank one, and only after a
+    // retry: the tile host answers with an occasional 503, and treating one as permanent left
+    // the map a flat field with the routes floating on it and no way back except a reload.
+    //
+    // Matching on the failed request's URL, never on the error text. A substring test for
+    // "style" also caught the relief layer's tile errors -- which is how switching Terrain on
+    // blanked the basemap -- and, worse, caught MapLibre's own "Style is not done loading",
+    // which this handler's own setStyle provokes: error, retry, error, forever.
+    const styleUrls: string[] = Object.values(BASEMAP_STYLE);
+    let styleTries = 0;
     map.on('error', (e) => {
-      // A missing basemap must not take the coverage layer down with it.
-      if (String(e?.error?.message ?? '').includes('style'))
-          map.setStyle(fallbackStyle(useStore.getState().theme));
+      const url = (e.error as { url?: string } | undefined)?.url ?? '';
+      if (!styleUrls.includes(url)) return;
+      const theme = useStore.getState().theme;
+      if (styleTries < STYLE_RETRIES) {
+        styleTries += 1;
+        window.setTimeout(() => map.setStyle(BASEMAP_STYLE[theme]), STYLE_RETRY_MS * styleTries);
+        return;
+      }
+      map.setStyle(fallbackStyle(theme));
+    });
+    // A style that arrived means the next failure gets its own retries rather than inheriting
+    // a budget the last one spent.
+    map.on('styledata', () => {
+      if (map.isStyleLoaded()) styleTries = 0;
     });
 
     const deck = new Deck({
@@ -199,6 +265,33 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     };
     // 'move' fires continuously through animated flights, so the two stay locked together.
     map.on('move', sync);
+    // Only a gesture carries an originalEvent; the app's own eases do not. Once the viewer has
+    // moved the map, where they put it outranks whatever the app last framed.
+    map.on('movestart', (e) => {
+      if ((e as { originalEvent?: unknown }).originalEvent) framed.current = null;
+    });
+
+    // The map is a grid cell now, not the window, so it changes size without the window doing
+    // anything: the sheet drags, the charts widen the rail, a scrollbar appears. MapLibre only
+    // watches the window, and the deck canvas is sized by CSS alone, so without this the
+    // projection and every picked coordinate quietly refer to the old size.
+    const ro = new ResizeObserver(() => {
+      map.resize();
+      // Re-frame rather than merely re-project, so the promise a fit made survives the sheet
+      // being dragged, the charts widening the rail, or the first layout arriving late.
+      const bb = framed.current;
+      if (bb) {
+        map.fitBounds(
+          [
+            [bb[0], bb[1]],
+            [bb[2], bb[3]],
+          ],
+          { padding: FIT_PAD, duration: 0, essential: true },
+        );
+      }
+      sync();
+    });
+    ro.observe(el);
     map.on('moveend', onViewportChange);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
@@ -207,6 +300,10 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     // worker already holds every site position.
     const onMove = (e: PointerEvent) => {
       if (boxing.current) return;
+      // A finger has no hover. `pointerleave` is unreliable for touch, so a tooltip opened this
+      // way would sit under the finger until something else dismissed it -- and a tap already
+      // opens the fuller SitePopup through the click handler below.
+      if (e.pointerType === 'touch') return;
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -214,7 +311,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       // Ground metres per CSS pixel at this latitude and zoom.
       const mPerPx =
         (156543.03392 * Math.cos((ll.lat * Math.PI) / 180)) / Math.pow(2, map.getZoom());
-      onHover({ lng: ll.lng, lat: ll.lat, radiusM: mPerPx * PICK_RADIUS, x, y });
+      onHover({ lng: ll.lng, lat: ll.lat, radiusM: mPerPx * pickRadius(), x, y });
     };
     const onLeave = () => onHover(null);
     el.addEventListener('pointermove', onMove);
@@ -306,7 +403,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       onPick({
         lng: e.lngLat.lng,
         lat: e.lngLat.lat,
-        radiusM: mPerPx * PICK_RADIUS,
+        radiusM: mPerPx * pickRadius(),
         x: e.point.x,
         y: e.point.y,
       });
@@ -354,6 +451,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
         return [b.getWest() + dx, b.getSouth() + dy, b.getEast() - dx, b.getNorth() - dy];
       },
       flyToBounds: (bb, durationMs = 900) => {
+        framed.current = bb;
         easeToBounds(
           map,
           [
@@ -375,6 +473,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
         // Already framed AND filling a reasonable share of the view: leave it alone.
         const fillsView = (bb[2] - bb[0]) / (curW || 1) > 0.3 && (bb[3] - bb[1]) / (curH || 1) > 0.3;
         if (contained && fillsView) return;
+        framed.current = bb;
         easeToBounds(
           map,
           [
@@ -390,6 +489,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     // Hand over handles even if the basemap never loads.
     const t = window.setTimeout(() => onReady(handles), 4000);
     return () => {
+      ro.disconnect();
       window.clearTimeout(t);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerleave', onLeave);

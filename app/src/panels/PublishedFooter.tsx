@@ -27,7 +27,7 @@ export function PublishedFooter({ builtAt }: { builtAt?: string }) {
   const age = formatBuiltAt(builtAt);
 
   return (
-    <div className="panel" style={{ width: 232 }}>
+    <div className="panel">
       <div style={{ color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }}>GroundCover</div>
       <div style={{ color: 'var(--text-muted)', fontSize: 11.5, lineHeight: 1.5, marginTop: 3 }}>
         Deduplicated coverage, not a heatmap of repeats. Powered by Strava

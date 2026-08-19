@@ -100,7 +100,7 @@ export function SearchBox({ onGo }: { onGo: (bounds: Bounds, activityIdx: number
     <div
       ref={boxRef}
       className="panel"
-      style={{ top: 12, left: '50%', transform: 'translateX(-50%)', width: 340, padding: 0, overflow: 'hidden' }}
+      style={{ overflow: 'hidden' }}
     >
       <input
         ref={inputRef}

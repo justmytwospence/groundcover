@@ -49,7 +49,7 @@ export function SharePanel({
   };
 
   return (
-    <div className="panel" style={{ width: 290 }}>
+    <div className="panel">
       <h2>
         Share this view
         <button onClick={onClose} aria-label="Close">

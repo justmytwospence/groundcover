@@ -110,9 +110,14 @@ export function Scrubber() {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    // A gesture the browser takes over for scrolling ends in `pointercancel` and never
+    // `pointerup`. Listening only for the latter latches the drag, and every later touch
+    // anywhere on the page keeps scrubbing the window.
+    window.addEventListener('pointercancel', up);
     return () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
     };
   }, [posToTs, setWindow, t0, t1, span, minTs, maxTs]);
 
@@ -224,7 +229,7 @@ export function Scrubber() {
   const fmt = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 10);
 
   return (
-    <div className="panel" style={{ left: 12, right: 292, bottom: 12, padding: '10px 14px' }}>
+    <div className="panel" style={{ padding: '10px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <button
           className="ghost"
@@ -285,9 +290,12 @@ export function Scrubber() {
 
       <div
         ref={trackRef}
-        style={{ position: 'relative', height: 46, cursor: 'crosshair', userSelect: 'none' }}
+        // Without this the browser claims a touch drag for scrolling the sheet, and the brush
+        // follows the finger only until it decides otherwise.
+        style={{ position: 'relative', height: 46, cursor: 'crosshair', userSelect: 'none', touchAction: 'none' }}
         onPointerDown={(e) => {
           if (drag.current) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
           const ts = posToTs(e.clientX);
           // Grab the nearer handle.
           if (Math.abs(ts - t0) < Math.abs(ts - t1)) {
@@ -366,6 +374,7 @@ export function Scrubber() {
         {(['t0', 't1'] as const).map((h) => (
           <div
             key={h}
+            className="scrub-handle"
             style={{
               position: 'absolute',
               top: -2,
@@ -378,13 +387,14 @@ export function Scrubber() {
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
               drag.current = h;
             }}
           />
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+      <div className="preset-row" style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
         <button className="chip" onClick={() => setWindow(minTs, maxTs + DAY)}>
           All time
         </button>

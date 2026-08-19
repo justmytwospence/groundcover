@@ -557,46 +557,59 @@ calculated" panel.
 
 ### 6.1 Layout
 
-Full-bleed map. Everything else floats over it in translucent panels with a subtle blur and
-a 1 px hairline border.
+**Persistent chrome is docked and never overlaps the map.** Only transient, user-summoned
+surfaces are allowed over it: the site popup, the hover tooltip, the drag-zoom rectangle, the
+sync ribbon.
+
+That is not a stylistic preference. Every automatic fit pads by one symmetric `FIT_PAD` and has
+no idea what is drawn on top of the map, so anything floating over it silently eats part of what
+was framed — and a shared link (6.8) is a promise about exactly that. Panels used to float in
+the corners, covering 222–302 px on the left and 280 px on the right against a fit that allowed
+80 px, so what a link framed and what its recipient saw were routinely different. Docking makes
+the map's own grid cell the visible rectangle, which makes the promise true by construction
+rather than by a table of per-side insets that has to track every panel width forever.
+
+The shell is a CSS grid with two layouts.
 
 ```
-+--------------------------------------------------------------------------+
-| +-- FILTERS ------------+                     +-- STATS ---------------+ |
-| | Sport                 |                     |  312.4 mi   84.2 mi    | |
-| |  [x] Foot   [x] Ride  |                     |  distinct   new ground | |
-| |  [ ] Ski    [ ] Water |                     |  ---------------------- | |
-| |  [ ] Other            |                     |  1,842 mi total logged | |
-| |                       |                     |  83% repeat            | |
-| | Mode                  |                     |  [ ] Limit to map view | |
-| |  (o) Exploration      |                     |  Stats and charts  >   | |
-| |  ( ) Heatmap          |                     +------------------------+ |
-| +-----------------------+                                                |
-|                                                                          |
-|                              M A P                                       |
-|                                                                          |
-|                                              +-- LEGEND --------------+  |
-|                                              | == frontier   1 visit  |  |
-|                                              | == familiar   2-4      |  |
-|                                              | == known      5-9      |  |
-|                                              | == worn in    10+      |  |
-|                                              +------------------------+  |
-|                                          (exploration mode shown; heatmap |
-|                                           mode has five rows -- see 6.4)  |
-| +-- SCRUBBER ----------------------------------------------------------+ |
-| |  _.|||._..||||_.._|||||||._..|||._      [ >  ] [1x] [expanding v]    | |
-| |  [========|##############|=====================]                     | |
-| |  2014        Jan 2019      Nov 2022                       2026       | |
-| |  All time | 2026 | 2025 | 2024 | ... | Last 12 months                | |
-| +----------------------------------------------------------------------+ |
-+--------------------------------------------------------------------------+
+desktop (> 700px)                          phone (<= 700px)
++--------+---------------------------+     +-----------------------+
+| search |                           |     |                       |
+| filters|                           |     |          MAP          |
+| mode   |            MAP            |     |                       |
+| stats  |     (nothing over it)     |     +-----------------------+
+| legend |                           |     | >  ===== scrubber === |
++--------+---------------------------+     +-----------------------+
+| >  ======== scrubber ============= |     | ======= handle ====== |
++------------------------------------+     | stats / filters / ... |
+                                           +-----------------------+
 ```
+
+- **Rail** (`--rail-w`, 302 px): search, filters, mode, legend, stats, then account or the
+  published footer pinned to the bottom. It widens to 560 px to hold the charts, which are
+  docked rather than floated for the same reason as everything else — the drawer was the one
+  surface large enough to bury the map completely.
+- **Transport**: the scrubber, full width, always visible at every sheet position.
+- **Phone**: the rail becomes a sheet with three stops — peek (the grab handle alone), half,
+  full. It takes a grid row rather than floating, so the map's cell is still exactly what the
+  viewer can see at any stop and fits need no mobile-specific code. Full stops at 55% of the
+  viewport: a sheet that can cover the map turns the thing you came for into something you have
+  to dismiss the UI to see. The year chips scroll sideways instead of wrapping, which used to
+  double the transport's height on the screens with the least to spare.
+
+Because the map is a grid cell rather than the window, it changes size without the window
+doing anything, and MapLibre only watches the window: `MapView` carries a `ResizeObserver` that
+resizes the map, re-syncs the deck camera, and **re-frames the last requested extent** — a plain
+`resize()` keeps centre and zoom, which silently rescopes what a fit promised. The framing is
+held until the viewer moves the map themselves.
 
 Panel behavior:
 
-- All panels are collapsible to a title bar. Collapsed state persists in the URL hash.
-- On viewports narrower than 900 px, the filter and stats panels collapse by default.
-- The map is never covered by more than about a third of the viewport.
+- Filters and stats are collapsible to a title bar.
+- Touch: rotation and pitch are disabled (an accidental twist otherwise widens the viewport
+  filter), the pick radius grows on coarse pointers, drags use pointer capture and handle
+  `pointercancel`, and the hover tooltip is suppressed for touch since a tap already opens the
+  fuller popup.
 
 ### 6.2 Design tokens
 

@@ -103,7 +103,9 @@ export function SitePopup({ info, x, y, onClose, onPreview }: Props) {
             href={`https://www.strava.com/activities/${a.stravaId}`}
             target="_blank"
             rel="noopener noreferrer"
-            onMouseEnter={() => onPreview(a.idx)}
+            // Pointer, not mouse: on a phone this was the one control in the popup that could
+            // not be reached at all, so tapping a row previewed nothing.
+            onPointerEnter={() => onPreview(a.idx)}
             style={{
               display: 'block',
               padding: '6px 12px',

@@ -54,7 +54,7 @@ export function AccountPanel({
   }
 
   return (
-    <div className="panel" style={{ width: 250 }}>
+    <div className="panel">
       <h2>
         Your data
         <button onClick={() => setOpen(false)} title="Close">

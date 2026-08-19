@@ -13,7 +13,7 @@ export function StatsCard() {
 
   return (
     <>
-      <div className="panel" style={{ top: 12, right: 12, width: 268 }}>
+      <div className="panel">
         <h2>
           {viewportFilter ? 'Stats · map view' : 'Stats'}
           <button onClick={() => set({ statsOpen: !statsOpen })} aria-label="Toggle stats">

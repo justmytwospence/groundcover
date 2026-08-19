@@ -18,7 +18,7 @@ export function FilterPanel() {
   if (!manifest) return null;
 
   return (
-    <div className="panel" style={{ top: 12, left: 12, width: 210 }}>
+    <div className="panel">
       <h2>
         Filters
         <button onClick={() => set({ filtersOpen: !filtersOpen })} aria-label="Toggle filters">
