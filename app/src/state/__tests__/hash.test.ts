@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseHash } from '../hash.js';
+import { clampWindow, parseHash } from '../hash.js';
 
 const JAN_1_2023 = 1672531200;
 
@@ -69,6 +69,22 @@ describe('parseHash', () => {
     expect(parseHash('#map=-105.1,39.8').camera).toBeNull();
   });
 
+  it('rejects empty components, which Number() would read as zero', () => {
+    // `b=,,,` would otherwise frame a zero-area box at null island at maximum zoom.
+    expect(parseHash('#b=,,,').camera).toBeNull();
+    expect(parseHash('#b=-105.3,,-104.9,40.1').camera).toBeNull();
+  });
+
+  it('rejects a degenerate box, which frames nothing', () => {
+    expect(parseHash('#b=-105.3,39.6,-105.3,40.1').camera).toBeNull();
+    expect(parseHash('#b=-105.3,39.6,-104.9,39.6').camera).toBeNull();
+  });
+
+  it('reads the autoplay flag, so a link to a progression plays it', () => {
+    expect(parseHash('#play=1').view.playing).toBe(true);
+    expect(parseHash('#t0=2023-01-01').view.playing).toBeUndefined();
+  });
+
   it('keeps only real sport groups, and never an empty set', () => {
     expect(parseHash('#g=0,2,2,9,-1,x').view.groups).toEqual([0, 2]);
     expect(parseHash('#g=9').view.groups).toBeUndefined();
@@ -87,5 +103,36 @@ describe('parseHash', () => {
       drawerOpen: true,
     });
     expect(parseHash('#m=nonsense&u=furlongs').view).toEqual({});
+  });
+});
+
+describe('clampWindow', () => {
+  const LO = 1672531200; // 2023-01-01, the published map's first day
+  const HI = 1787000000;
+
+  it('leaves a window that already fits alone', () => {
+    expect(clampWindow(1700000000, 1710000000, LO, HI)).toEqual([1700000000, 1710000000]);
+  });
+
+  it('slides a window that starts before the data, keeping its length', () => {
+    // The pre-2023 link the truncation created. Clamping each end alone would collapse this to
+    // a single instant, which is the blank map the clamp exists to avoid.
+    const [a, b] = clampWindow(LO - 86400 * 30, LO - 86400 * 10, LO, HI)!;
+    expect(a).toBe(LO);
+    expect(b - a).toBe(86400 * 20);
+  });
+
+  it('slides a window that runs past the end of the data', () => {
+    const [a, b] = clampWindow(HI + 100, HI + 700, LO, HI)!;
+    expect(b).toBe(HI);
+    expect(b - a).toBe(600);
+  });
+
+  it('falls back to the whole range when the window is longer than the data', () => {
+    expect(clampWindow(0, 2e9, LO, HI)).toEqual([LO, HI]);
+  });
+
+  it('reports nothing to apply when the link named no window', () => {
+    expect(clampWindow(undefined, undefined, LO, HI)).toBeNull();
   });
 });

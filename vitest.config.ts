@@ -8,5 +8,9 @@ export default defineConfig({
       'scripts/**/__tests__/**/*.test.ts',
     ],
     environment: 'node',
+    // The app's browser-facing modules touch sessionStorage, window.location and history at
+    // import time. They are a small minority of the suite, so the default stays 'node' and
+    // only they pay for a DOM.
+    environmentMatchGlobs: [['app/src/**', 'jsdom']],
   },
 });

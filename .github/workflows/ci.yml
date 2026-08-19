@@ -1,0 +1,27 @@
+# Lint, typecheck, test, build. SPEC.md section 8 has described this as running since v1; it
+# was never actually here, so nothing stopped a regression from reaching either deployment --
+# including one that silently reverted the publish build's read-only mode.
+#
+# Deliberately does NOT run `build:ledger`: that needs the gitignored `data/`. The ledger is
+# covered by `npm test`, which is where its adversarial suite lives.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm -w app run build

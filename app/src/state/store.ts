@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import type { ActivitySummary, Manifest } from '@um/ledger';
 import { initialChoice, resolveTheme, type Theme, type ThemeChoice } from '../lib/theme.js';
 import type { MapMode, QueryExtras } from '../worker/protocol.js';
-import { parseHash, type InitialView } from './hash.js';
+import { clampWindow, parseHash, type InitialView } from './hash.js';
 
 export type { InitialView };
 export { parseHash };
@@ -110,6 +110,7 @@ function writeSelection(s: State): URLSearchParams {
   if (s.skipOutsideBounds) h.set('inview', '1');
   h.set('u', s.units);
   if (s.drawerOpen) h.set('d', '1');
+  if (s.playing) h.set('play', '1');
   return h;
 }
 
@@ -171,16 +172,13 @@ if (import.meta.env.DEV) {
 export function hydrateFromHash(minTs: number, maxTs: number): void {
   const s = useStore.getState();
   const { view } = parseHash(location.hash);
-  // Clamped to the data this build actually holds. The published map is truncated (SPEC.md
-  // section 4.6), so a link shared before that names a window holding nothing; landing on the
-  // nearest real window beats landing on a blank map with no explanation.
   const hi = maxTs + DAY;
-  const clamp = (v: number) => Math.min(Math.max(v, minTs), hi);
+  const win = clampWindow(view.t0, view.t1, minTs, hi);
   useStore.setState({
     minTs,
     maxTs,
-    t0: view.t0 !== undefined ? clamp(view.t0) : minTs,
-    t1: view.t1 !== undefined ? clamp(view.t1) : hi,
+    t0: win?.[0] ?? minTs,
+    t1: win?.[1] ?? hi,
     groups: view.groups ?? s.groups,
     mode: view.mode ?? s.mode,
     viewportFilter: view.viewportFilter ?? s.viewportFilter,
@@ -190,6 +188,7 @@ export function hydrateFromHash(minTs: number, maxTs: number): void {
     skipOutsideBounds: view.skipOutsideBounds ?? s.skipOutsideBounds,
     units: view.units ?? s.units,
     drawerOpen: view.drawerOpen ?? s.drawerOpen,
+    playing: view.playing ?? false,
   });
 }
 
@@ -208,6 +207,15 @@ function saveCamera(b: [number, number, number, number]): void {
     sessionStorage.setItem(CAMERA_KEY, b.map((v) => v.toFixed(5)).join(','));
   } catch {
     // A private-mode storage refusal is not worth breaking the map over.
+  }
+}
+
+/** Part of "disconnect and erase": see `useConnection.disconnect`. */
+export function forgetCamera(): void {
+  try {
+    sessionStorage.removeItem(CAMERA_KEY);
+  } catch {
+    // Nothing was stored if storage is refused, so there is nothing to forget.
   }
 }
 
@@ -232,9 +240,15 @@ function loadCamera(): InitialView | null {
 export function buildShareUrl(
   includeView: boolean,
   viewBounds: [number, number, number, number] | null,
+  autoplay = false,
 ): string {
   const h = writeSelection(useStore.getState());
   if (includeView && viewBounds) h.set('b', viewBounds.map((v) => v.toFixed(4)).join(','));
+  // Set AND cleared: `writeSelection` emits play=1 whenever the time-lapse happens to be
+  // running, so without the delete the checkbox could only ever add autoplay, never remove it
+  // from a link copied mid-playback.
+  if (autoplay) h.set('play', '1');
+  else h.delete('play');
   return `${location.origin}${location.pathname}${location.search}#${h.toString()}`;
 }
 
@@ -261,11 +275,32 @@ export function startHashSync(getViewBounds: () => [number, number, number, numb
  * Session storage is the fallback, never the priority: a camera named by the link always beats
  * wherever this tab happened to be looking.
  */
-const INITIAL_VIEW: InitialView | null = parseHash(location.hash).camera ?? loadCamera();
+const INITIAL_VIEW: InitialView | null = (() => {
+  const { view, camera } = parseHash(location.hash);
+  if (camera) return camera;
+  // A link carrying a window but no camera asks to be framed on that window. Restoring where
+  // this tab was looking would silently win and open a stranger's link on your own ground.
+  if (view.t0 !== undefined || view.t1 !== undefined) return null;
+  return loadCamera();
+})();
 
 export function readInitialView(): InitialView | null {
   return INITIAL_VIEW;
 }
+
+/**
+ * What a hash without a given flag means: off. Kept beside `writeSelection`, which is what
+ * decides that an option at its default is simply omitted.
+ */
+const DEFAULTED_BY_HASH = {
+  viewportFilter: false,
+  fitToSelection: false,
+  fitWhilePlaying: false,
+  skipEmptyDays: true,
+  skipOutsideBounds: false,
+  drawerOpen: false,
+  playing: false,
+} satisfies Partial<State>;
 
 /**
  * Pasting a link into the address bar of a tab that is already here fires `hashchange` and
@@ -273,14 +308,26 @@ export function readInitialView(): InitialView | null {
  * which is indistinguishable from a broken link. Our own debounced writes are recognised by
  * comparing against what we would have written.
  */
-export function startHashListener(onCamera: (v: InitialView) => void): () => void {
+export function startHashListener(onView: (v: InitialView | null) => void): () => void {
   const onChange = () => {
     const s = useStore.getState();
     if (s.load !== 'ready') return;
     if (location.hash.replace(/^#/, '') === writeSelection(s).toString()) return;
     const { view, camera } = parseHash(location.hash);
-    if (Object.keys(view).length > 0) useStore.setState(view);
-    if (camera) onCamera(camera);
+    if (Object.keys(view).length === 0 && !camera) return;
+    const win = clampWindow(view.t0, view.t1, s.minTs, s.maxTs + DAY);
+    useStore.setState({
+      // Defaults are restored rather than merged. `parseHash` only reports the options a link
+      // turns ON, because that is all the writer emits, so merging would leave this tab's
+      // leftover flags set and render the same link differently from a fresh load.
+      ...DEFAULTED_BY_HASH,
+      ...view,
+      ...(win ? { t0: win[0], t1: win[1] } : {}),
+      playhead: null,
+    });
+    // Null too: a link with no camera is the common one, and it means "frame the window you
+    // just applied", not "leave the recipient wherever they happened to be looking".
+    onView(camera);
   };
   window.addEventListener('hashchange', onChange);
   return () => window.removeEventListener('hashchange', onChange);

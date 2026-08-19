@@ -31,6 +31,9 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
   ],
 });
 
+/** Padding every automatic fit leaves around what it frames, in pixels. */
+const FIT_PAD = 80;
+
 /** How far from the cursor to search for a line, in pixels. An 8 m tick is a hairline. */
 const PICK_RADIUS = 10;
 
@@ -155,7 +158,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       // and zoom are set directly. Either way the map opens already there, with no flight in
       // from the default view.
       ...(saved?.kind === 'bounds'
-        ? { bounds: saved.bounds, fitBoundsOptions: { padding: 80 } }
+        ? { bounds: saved.bounds, fitBoundsOptions: { padding: FIT_PAD } }
         : { center: saved?.center ?? [-98, 39], zoom: saved?.zoom ?? 3 }),
       attributionControl: { compact: true },
     });
@@ -341,7 +344,14 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       },
       getBounds: () => {
         const b = map.getBounds();
-        return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+        // Shrunk by exactly the padding every restore adds back. Handing back the raw visible
+        // extent and re-fitting it into a viewport 2 * PAD narrower loses a fraction of a zoom
+        // level on each reload, and the map walks steadily outwards from where it was left.
+        const el = map.getContainer();
+        const dx = el.clientWidth > 2 * FIT_PAD ? ((b.getEast() - b.getWest()) * FIT_PAD) / el.clientWidth : 0;
+        const dy =
+          el.clientHeight > 2 * FIT_PAD ? ((b.getNorth() - b.getSouth()) * FIT_PAD) / el.clientHeight : 0;
+        return [b.getWest() + dx, b.getSouth() + dy, b.getEast() - dx, b.getNorth() - dy];
       },
       flyToBounds: (bb, durationMs = 900) => {
         easeToBounds(
@@ -350,7 +360,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
             [bb[0], bb[1]],
             [bb[2], bb[3]],
           ],
-          { padding: 80, duration: durationMs },
+          { padding: FIT_PAD, duration: durationMs },
         );
       },
       setHovering: (on) => {
@@ -371,7 +381,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
             [bb[0], bb[1]],
             [bb[2], bb[3]],
           ],
-          { padding: 80, duration: 700 },
+          { padding: FIT_PAD, duration: 700 },
         );
       },
     };

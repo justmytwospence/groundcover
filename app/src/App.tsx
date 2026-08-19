@@ -15,6 +15,8 @@ import { SharePanel } from './panels/SharePanel.js';
 import { ConnectFlow } from './connect/ConnectFlow.js';
 import { SyncRibbon } from './connect/SyncRibbon.js';
 import { useConnection } from './connect/useConnection.js';
+import { IS_PUBLISHED_BUILD } from './worker/artifactSource.js';
+import { PublishedFooter } from './panels/PublishedFooter.js';
 import {
   hydrateFromHash,
   readInitialView,
@@ -312,9 +314,20 @@ export function App() {
   useEffect(
     () =>
       startHashListener((v) => {
-        if (v.kind === 'bounds') mapRef.current?.flyToBounds(v.bounds);
+        const m = mapRef.current;
+        if (!m) return;
+        if (v?.kind === 'bounds') {
+          m.flyToBounds(v.bounds);
+          return;
+        }
+        // No camera in the link: frame the window it just applied, the same as a cold load
+        // would. Without this the address bar and the selection move and the map does not,
+        // which is the exact symptom this listener exists to remove.
+        const s = useStore.getState();
+        const bb = selectionBounds(s.t0, s.t1, s.groups, s.activities);
+        if (bb) m.flyToBounds(bb);
       }),
-    [],
+    [selectionBounds],
   );
 
   /**
@@ -509,19 +522,25 @@ export function App() {
   // is true both for a returning visitor and for local development against files built by the
   // Node pipeline, where nothing was ever "connected" in this browser at all. Only once we know
   // there is nothing to draw does the question of connecting arise.
-  // No `progress > 0` guard. That byte counter is fed only by the dev-only HTTP artifact
-  // source, which production drops entirely, so the card it gated was unreachable for every
-  // real visitor -- who instead got an unbranded dark rectangle for however long it took to
-  // read tens of megabytes out of IndexedDB and rebuild the geometry.
+  // No `progress > 0` guard. In the BYO build that byte counter is fed only by the dev-only
+  // HTTP artifact source, so the card it gated was unreachable for every real visitor -- who
+  // instead got an unbranded dark rectangle for however long it took to read tens of megabytes
+  // out of IndexedDB and rebuild the geometry. The publish build does feed it, over the network.
   if (conn.state === 'checking' || store.load === 'loading') {
     return (
       <>
         <ThemeToggle floating />
         <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>Loading your map</div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 15 }}>
+            {IS_PUBLISHED_BUILD ? 'Loading the map' : 'Loading your map'}
+          </div>
           <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>
-            {progress > 0 ? `${(progress / 1e6).toFixed(1)} MB` : 'Reading it back out of this browser'}
+            {progress > 0
+              ? `${(progress / 1e6).toFixed(1)} MB`
+              : IS_PUBLISHED_BUILD
+                ? 'Fetching coverage'
+                : 'Reading it back out of this browser'}
           </div>
         </div>
         </div>
@@ -536,22 +555,28 @@ export function App() {
         <div className="connect-scroll">
         <div className="connect-card" style={{ margin: 'auto' }}>
           <h1 className="connect-title" style={{ fontSize: 24 }}>
-            Your stored map could not be read
+            {IS_PUBLISHED_BUILD ? 'This map could not be loaded' : 'Your stored map could not be read'}
           </h1>
+          {/* Nothing a visitor to the published map can do about it, so do not offer them a
+              control that spends their time and cannot help. */}
           <p className="connect-lede">
-            {store.loadError} Rebuilding from the activities already downloaded usually fixes it,
-            and costs no Strava requests.
+            {store.loadError}
+            {IS_PUBLISHED_BUILD
+              ? ' It is rebuilt nightly; try again shortly.'
+              : ' Rebuilding from the activities already downloaded usually fixes it, and costs no Strava requests.'}
           </p>
-          <button className="ghost" onClick={conn.rebuild}>
-            Rebuild
-          </button>
+          {!IS_PUBLISHED_BUILD && (
+            <button className="ghost" onClick={conn.rebuild}>
+              Rebuild
+            </button>
+          )}
         </div>
         </div>
       </>
     );
   }
 
-  if (showConnect || (store.load !== 'ready' && conn.state === 'disconnected')) {
+  if (!IS_PUBLISHED_BUILD && (showConnect || (store.load !== 'ready' && conn.state === 'disconnected'))) {
     return (
       <>
         <ThemeToggle floating />
@@ -615,7 +640,7 @@ export function App() {
 
       {/* An empty map with nothing running is a dead end: the sync stopped before it produced
           anything, or an earlier visit was interrupted. Say so and offer the way forward. */}
-      {store.load === 'no-artifacts' && !conn.sync && !conn.building && (
+      {!IS_PUBLISHED_BUILD && store.load === 'no-artifacts' && !conn.sync && !conn.building && (
         <div className="panel" style={{ top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 320 }}>
           <h2>Nothing here yet</h2>
           <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 12 }}>
@@ -661,13 +686,17 @@ export function App() {
               >
                 Share
               </button>
-              <AccountPanel
-                busy={conn.sync !== null || conn.building}
-                connected={conn.state === 'connected'}
-                onSync={conn.startSync}
-                onConnect={() => setShowConnect(true)}
-                onDisconnect={conn.disconnect}
-              />
+              {IS_PUBLISHED_BUILD ? (
+                <PublishedFooter builtAt={store.manifest?.builtAt} />
+              ) : (
+                <AccountPanel
+                  busy={conn.sync !== null || conn.building}
+                  connected={conn.state === 'connected'}
+                  onSync={conn.startSync}
+                  onConnect={() => setShowConnect(true)}
+                  onDisconnect={conn.disconnect}
+                />
+              )}
             </div>
             {showShare && (
               <SharePanel

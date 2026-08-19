@@ -21,6 +21,7 @@ export function SharePanel({
   onClose: () => void;
 }) {
   const [includeView, setIncludeView] = useState(false);
+  const [autoplay, setAutoplay] = useState(false);
   const [copied, setCopied] = useState(false);
   const t0 = useStore((s) => s.t0);
   const t1 = useStore((s) => s.t1);
@@ -28,7 +29,7 @@ export function SharePanel({
 
   // Rebuilt on every render rather than held in state: the window moves under the panel while
   // it is open, and a stale link is worse than no link.
-  const url = buildShareUrl(includeView, getViewBounds());
+  const url = buildShareUrl(includeView, getViewBounds(), autoplay);
 
   useEffect(() => {
     if (!copied) return;
@@ -75,6 +76,14 @@ export function SharePanel({
           onChange={(e) => setIncludeView(e.currentTarget.checked)}
         />
         Pin the current map view
+      </label>
+      <label className="check" style={{ fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={autoplay}
+          onChange={(e) => setAutoplay(e.currentTarget.checked)}
+        />
+        Start the time-lapse on open
       </label>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.45, marginTop: 2 }}>
         {includeView

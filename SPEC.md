@@ -965,9 +965,11 @@ reference scale of 3,000 activities and roughly 1M sites; the budgets carry head
   and scan produce the same numbers as a naive reference implementation.
 - The app gets no component tests in v1. Verify visually with `npm run dev` plus the
   chrome-devtools MCP.
-- CI runs `lint`, `typecheck`, `test`, and `npm -w app run build`. It does **not** run
-  `build:ledger`, which needs the gitignored `data/` directory; the ledger is already fully
-  exercised by `test`.
+- CI (`.github/workflows/ci.yml`) runs `lint`, `typecheck`, `test`, and `npm -w app run build`
+  on every push to `main` and every pull request. It does **not** run `build:ledger`, which
+  needs the gitignored `data/` directory; the ledger is already fully exercised by `test`.
+- The app's browser-facing modules read `sessionStorage` and `window.location` at import, so
+  `app/src/**` runs under jsdom while everything else stays on the faster `node` environment.
 
 ---
 

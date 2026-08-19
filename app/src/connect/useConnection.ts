@@ -12,6 +12,7 @@ import { clearAll } from '../lib/db.js';
 import type { BuildResponse } from '../worker/build.worker.js';
 import { IS_PUBLISHED_BUILD } from '../worker/artifactSource.js';
 import { isConnected } from './creds.js';
+import { forgetCamera } from '../state/store.js';
 import { completeAuthorization } from './oauth.js';
 import { runSync, type SyncProgress } from './sync.js';
 import type { BuildReport } from '../panels/ImportReport.js';
@@ -143,6 +144,9 @@ export function useConnection(onArtifacts: () => void): Connection {
     // disk -- with the page then reloading to the connect screen, where no erase control exists.
     await syncDone.current?.catch(() => {});
     await clearAll();
+    // The map's last position is per-tab, not in IndexedDB, so `clearAll` does not reach it.
+    // Left behind, the erased account's home area is still what the map opens on.
+    forgetCamera();
     setSync(null);
     setState('disconnected');
     // A full reload is the only way to be sure nothing derived from the old account survives

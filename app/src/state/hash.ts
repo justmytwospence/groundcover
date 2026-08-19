@@ -24,8 +24,12 @@ export type InitialView =
 
 const nums = (v: string | null, count: number): number[] | null => {
   if (!v) return null;
-  const parts = v.split(',').map(Number);
-  return parts.length === count && parts.every(Number.isFinite) ? parts : null;
+  const raw = v.split(',');
+  // `Number('')` is 0, so `b=,,,` would otherwise parse as a zero-area box at null island and
+  // the map would open fitted to it at maximum zoom.
+  if (raw.length !== count || raw.some((x) => x.trim() === '')) return null;
+  const parts = raw.map(Number);
+  return parts.every(Number.isFinite) ? parts : null;
 };
 
 /**
@@ -83,10 +87,14 @@ export function parseHash(hash: string): HashState {
   const u = h.get('u');
   if (u === 'mi' || u === 'km') out.units = u;
   if (h.get('d') === '1') out.drawerOpen = true;
+  // A link to a progression should show the progression. The recipient still gets a paused,
+  // scrubbable map the moment they touch anything -- this only decides the first second.
+  if (h.get('play') === '1') out.playing = true;
 
   let camera: InitialView | null = null;
   const b = nums(h.get('b'), 4);
-  if (b) {
+  // A degenerate box frames nothing and zooms to the maximum; treat it as no camera at all.
+  if (b && b[0] !== b[2] && b[1] !== b[3]) {
     // Corners ordered, so a box dragged right to left still frames something.
     const bounds: [number, number, number, number] = [
       Math.min(b[0], b[2]),
@@ -101,4 +109,35 @@ export function parseHash(hash: string): HashState {
   }
 
   return { view: out, camera };
+}
+
+/**
+ * A shared window, moved inside the data this build actually holds.
+ *
+ * The published map is truncated (SPEC.md section 4.6), so a link shared before the cutoff
+ * names a window holding nothing. Clamping each end independently would collapse such a window
+ * to a single instant -- an empty selection, which is the blank map the clamp exists to avoid --
+ * so the duration is preserved and the window slid into range instead. Only a window longer
+ * than the data itself falls back to the whole range.
+ */
+export function clampWindow(
+  t0: number | undefined,
+  t1: number | undefined,
+  lo: number,
+  hi: number,
+): [number, number] | null {
+  if (t0 === undefined && t1 === undefined) return null;
+  let a = t0 ?? lo;
+  let b = t1 ?? hi;
+  const span = b - a;
+  if (span >= hi - lo) return [lo, hi];
+  if (a < lo) {
+    a = lo;
+    b = lo + span;
+  }
+  if (b > hi) {
+    b = hi;
+    a = hi - span;
+  }
+  return [a, b];
 }
