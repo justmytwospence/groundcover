@@ -666,25 +666,53 @@ descends toward navy instead and every step was re-chosen rather than flipped.
 :root[data-theme='light'] {
   --map-surface:      #f4f4f1;
   --frontier:         #c07a00;  /* exactly 1 visit */
-  --repeat-1:         #4a86cf;  /* 2-4 visits   */
-  --repeat-2:         #245f9e;  /* 5-9 visits   */
-  --repeat-3:         #0f3557;  /* 10+ visits   */
+  --repeat-1:         #5b52e8;  /* 2-4 visits   */
+  --repeat-2:         #3822a0;  /* 5-9 visits   */
+  --repeat-3:         #1c0f5e;  /* 10+ visits   */
 
-  --heat-1:           #4a86cf;  /* 1 visit      */
-  --heat-2:           #3372b5;  /* 2-4 visits   */
-  --heat-3:           #245f9e;  /* 5-9 visits   */
-  --heat-4:           #164679;  /* 10-24 visits */
-  --heat-5:           #092c52;  /* 25+ visits   */
+  --heat-1:           #5b52e8;  /* 1 visit      */
+  --heat-2:           #4a34c9;  /* 2-4 visits   */
+  --heat-3:           #3822a0;  /* 5-9 visits   */
+  --heat-4:           #261577;  /* 10-24 visits */
+  --heat-5:           #170a4d;  /* 25+ visits   */
 }
 ```
 
+**The light ramp is indigo, not blue, and the reason is the basemap.** The blue it replaced was
+selected against its own surface and passed every criterion above — and still read as a river.
+Two things the original criteria did not measure:
+
+1. **Hairline width.** Coverage draws at `widthMinPixels: 1.2`, so at most zooms a line is
+   sub-pixel and antialiasing blends it toward the surface. `#4a86cf` is a confident blue;
+   `#4a86cf` as a hairline is `#8eb2dd`, a pale blue-grey — 1.99:1 against the surface, which is
+   the measurement behind "hard to see". Every water and contrast check now runs on the blended
+   colour, because that is the colour the eye compares.
+2. **The basemap's own palette.** Positron draws water in `#c2c8ca`/`#d4dadc`. The old ramp's
+   hairline sat 10.2 from it, in the same hue family. The rule is now a distance *and* a
+   40-degree hue-family separation, since a thin line is read by hue long before anyone measures
+   a distance.
+
+The indigo clears both: hairline 2.47:1, water 17.7 (13.5 under CVD), 109 degrees off the water
+hue, and 25.5 from the gold frontier. Water *labels* (`#495e91`, `#7a96a0`) are deliberately not
+part of the constraint — they are haloed text a few hundred pixels a screen, and holding a whole
+ramp away from them is what pinned the old palette into blue in the first place.
+
 Validated the same way, against `#f4f4f1`: both ramps monotone with adjacent lightness gaps at
-or above 0.06, single hue, and the lightest step clearing 3:1 at 3.40:1 -- deliberately mirroring
-the dark ramp's 3.41:1. The frontier accent had to change: `#eda100` sits at 1.9:1 on a light
-map, a hairline nobody would see. `#c07a00` clears 3:1 and still separates from every step of
-the light ramp by CVD delta-E 24.0, inside the 23.8-32.7 band the dark palette achieves. The
+or above 0.06, single hue, and every step clearing 3:1 (4.99:1 at the pale end). The frontier
+accent had to change too: `#eda100` sits at 1.9:1 on a light map, a hairline nobody would see.
+`#c07a00` clears 3:1 and separates from every step of the light ramp by CVD delta-E 25.5. The
 categorical chart trio is the one group that needs no second set -- it passes all-pairs CVD and
 the normal-vision floor on both surfaces.
+
+**`npm run palette` is the checker**, and it is in the repository now
+(`scripts/palette-check.ts`) rather than being a tool someone once ran elsewhere. It re-derives
+every number in this section from `app/src/lib/theme.ts`, so "re-validate rather than eyeballing"
+is an instruction that can actually be followed; `npm run palette -- search` ranks candidate hues
+when a constraint changes, and `-- explain '#hex,#hex'` scores one candidate. Known deviations
+are named in an `ALLOWANCES` table with their reason rather than hidden by loosening a
+threshold: the dark ramps' recessive step is a 1.90:1 hairline, left alone because that step's
+job is to recede and no one has reported it (`#256abf` -> `#3480da` would clear the bar at
+2.31:1 if it ever matters).
 
 The basemap changes with the surface: OpenFreeMap `dark` and `positron` respectively. This is
 safe to swap bluntly because deck.gl draws on its own canvas rather than as a layer inside

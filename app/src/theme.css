@@ -77,16 +77,16 @@
   --text-muted: #6c707a;
 
   --frontier: #c07a00;
-  --repeat-1: #4a86cf;
-  --repeat-2: #245f9e;
-  --repeat-3: #0f3557;
+  --repeat-1: #5b52e8;
+  --repeat-2: #3822a0;
+  --repeat-3: #1c0f5e;
   --ambiguous: #b0b0b7;
 
-  --heat-1: #4a86cf;
-  --heat-2: #3372b5;
-  --heat-3: #245f9e;
-  --heat-4: #164679;
-  --heat-5: #092c52;
+  --heat-1: #5b52e8;
+  --heat-2: #4a34c9;
+  --heat-3: #3822a0;
+  --heat-4: #261577;
+  --heat-5: #170a4d;
 
   /* The categorical trio passes all-pairs CVD and the normal-vision floor on both surfaces,
      so it is the one group that genuinely does not need a second set. */

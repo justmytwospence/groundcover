@@ -118,5 +118,9 @@ Each of these cost real debugging time and none announced itself.
 - The algorithm's tests in `packages/ledger/src/__tests__/` are the specification. Several of
   them deliberately assert *documented failures* (A6b, A9c). If one of those starts passing,
   that is a signal to review, not a bug to fix silently.
-- Map colors were validated with a palette checker, not chosen by eye. If you change any value
-  in `app/src/theme.css`, re-validate rather than eyeballing (see `SPEC.md` section 6.2).
+- Map colors were validated with a palette checker, not chosen by eye. The checker is
+  `npm run palette` (`scripts/palette-check.ts`); it reads `app/src/lib/theme.ts`, so change a
+  value there and in `app/src/theme.css` together and re-run it rather than eyeballing.
+  `npm run palette -- search` ranks candidate hues, `-- explain '#hex,#hex'` scores one
+  candidate. Known deviations live in its `ALLOWANCES` table with a reason, not in a loosened
+  threshold. See `SPEC.md` section 6.2.

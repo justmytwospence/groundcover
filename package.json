@@ -12,6 +12,7 @@
     "sync": "tsx scripts/sync.ts",
     "build:ledger": "tsx scripts/build-ledger.ts",
     "stats": "tsx scripts/stats.ts",
+    "palette": "tsx scripts/palette-check.ts",
     "dev": "npm -w app run dev",
     "build": "npm -w app run build",
     "preview": "npm -w app run preview",

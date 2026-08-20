@@ -60,10 +60,10 @@ export const PALETTES: Record<Theme, Palette> = {
     gradient: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
   },
   light: {
-    exploration: ['#c07a00', '#4a86cf', '#245f9e', '#0f3557', '#0f3557'],
-    heatmap: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'],
+    exploration: ['#c07a00', '#5b52e8', '#3822a0', '#1c0f5e', '#1c0f5e'],
+    heatmap: ['#5b52e8', '#4a34c9', '#3822a0', '#261577', '#170a4d'],
     frontier: '#c07a00',
-    gradient: ['#4a86cf', '#3d78bd', '#2f6aa8', '#245f9e', '#164679', '#0f3557'],
+    gradient: ['#5b52e8', '#5346d9', '#4a34c9', '#4029b4', '#3822a0', '#2b1a80'],
   },
 };
 
