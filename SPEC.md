@@ -682,11 +682,13 @@ descends toward navy instead and every step was re-chosen rather than flipped.
 selected against its own surface and passed every criterion above — and still read as a river.
 Two things the original criteria did not measure:
 
-1. **Hairline width.** Coverage draws at `widthMinPixels: 1.2`, so at most zooms a line is
-   sub-pixel and antialiasing blends it toward the surface. `#4a86cf` is a confident blue;
+1. **Hairline width.** Coverage drew at `widthMinPixels: 1.2`, so at most zooms a line was
+   sub-pixel and antialiasing blended it toward the surface. `#4a86cf` is a confident blue;
    `#4a86cf` as a hairline is `#8eb2dd`, a pale blue-grey — 1.99:1 against the surface, which is
-   the measurement behind "hard to see". Every water and contrast check now runs on the blended
-   colour, because that is the colour the eye compares.
+   the measurement behind "hard to see". Every water and contrast check now runs on the colour
+   as painted, at the mode's own opacity and the current minimum width, because that is the
+   colour the eye compares. The width floor was raised at the same time; the two fixes are the
+   same fix.
 2. **The basemap's own palette.** Positron draws water in `#c2c8ca`/`#d4dadc`. The old ramp's
    hairline sat 10.2 from it, in the same hue family. The rule is now a distance *and* a
    40-degree hue-family separation, since a thin line is read by hue long before anyone measures
@@ -793,12 +795,19 @@ tracks, what you see is exactly what the mileage numbers count.
 - Positions are computed once at artifact load into `Float32Array`s and never change.
 - Color is a `Uint8Array` of RGBA written by the query worker on every filter change. Pass
   the same position arrays by reference so deck.gl re-uploads only the color buffer.
-- `widthUnits: 'meters'`, `getWidth: 7`, `widthMinPixels: 1.2`, `widthMaxPixels: 8`.
+- `widthUnits: 'meters'`, `getWidth: 7`, `widthMinPixels: 2.4`, `widthMaxPixels: 8`. The floor
+  was 1.2, which is a hairline: antialiasing blends a sub-pixel line toward whatever is under
+  it, so the colour on screen was most of the way back to the basemap and coverage read as one
+  of the basemap's own thin features. 2.4 is still a fine line at city zoom and puts enough
+  pixels down for the colour to be the colour.
 - Sites with `visitCount === 0` under the current filter get alpha 0.
-- In heatmap mode, enable additive blending
+- In heatmap mode **on the dark surface**, enable additive blending
   (`parameters: { blend: true, blendFunc: [SRC_ALPHA, ONE] }`) so overlapping density
   accumulates into a glow. In exploration mode use normal alpha blending so the frontier
   color stays true.
+- **Light mode never blends additively.** Adding light to a near-white map drives every overlap
+  toward white, so the busiest ground came out the faintest -- the exact inverse of what the
+  mode encodes. Light composites normally and carries the density in opacity instead.
 
 Active-track layer (deck.gl `PathLayer`): during time-lapse playback, the single activity
 currently being played is drawn on top in near-white at higher width, so you can see the
@@ -833,17 +842,18 @@ count per site:
 | Visits | Exploration | alpha | Heatmap | alpha |
 |---|---|---|---|---|
 | 0 | hidden | 0 | hidden | 0 |
-| 1 | `--frontier` | 255 | `--heat-1` | 90 |
-| 2-4 | `--repeat-1` | 255 | `--heat-2` | 90 |
-| 5-9 | `--repeat-2` | 255 | `--heat-3` | 90 |
-| 10-24 | `--repeat-3` | 255 | `--heat-4` | 90 |
-| 25+ | `--repeat-3` | 255 | `--heat-5` | 90 |
+| 1 | `--frontier` | 255 | `--heat-1` | 90 dark / 190 light |
+| 2-4 | `--repeat-1` | 255 | `--heat-2` | 90 dark / 190 light |
+| 5-9 | `--repeat-2` | 255 | `--heat-3` | 90 dark / 190 light |
+| 10-24 | `--repeat-3` | 255 | `--heat-4` | 90 dark / 190 light |
+| 25+ | `--repeat-3` | 255 | `--heat-5` | 90 dark / 190 light |
 
 Alpha is part of the encoding, not a detail. Exploration mode uses normal alpha blending at
 full opacity so the band colors read true. Heatmap mode uses additive blending, where alpha
 controls how fast overlapping geometry saturates — at 255 every crossing clips to white within
-two or three overlaps and the five-step ramp is destroyed. 90 is the starting value; tune it
-once against real data and record the result here.
+two or three overlaps and the five-step ramp is destroyed. 90 is the dark value. Light mode
+composites normally rather than additively, so nothing saturates toward white and 90 would
+simply be faint: it uses 190. Both live in `MODE_ALPHA` (`app/src/lib/palette.ts`).
 
 The two modes share the 2-4 / 5-9 breakpoints so the legend stays learnable, but they diverge
 above 10: exploration has four bands (its top band is 10+) while heatmap has five (10-24 and

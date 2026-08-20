@@ -16,36 +16,14 @@
  * through. Water is therefore a first-class constraint here, not an afterthought.
  */
 
-import { PALETTES, type Theme } from '../app/src/lib/theme.js';
-
-/**
- * The map surface each palette was selected against, and the basemap colours a coverage line
- * has to stay distinguishable from. Water is sampled from the two light styles the app falls
- * through (OpenFreeMap positron and CARTO positron) and their dark counterparts; the greys are
- * their road casings.
- */
-const MAP_SURFACE: Record<Theme, string> = { dark: '#1b1f27', light: '#f4f4f1' };
-
-/**
- * What the basemap actually draws rivers and lakes with: OpenFreeMap's `water` fill and
- * `waterway` line, and CARTO's equivalents. All four are light blue-greys around L 0.82.
- *
- * Water *labels* (#495e91, #7a96a0) are deliberately not here. They are text, they carry a
- * white halo, and they occupy a few hundred pixels a screen -- holding a whole ramp away from
- * them is what forced the shipped palette into a corner, and it is not what anyone means by
- * "my route looks like a river".
- */
-const WATER: Record<string, string[]> = {
-  '#f4f4f1': ['#c2ccd0', '#c2c8ca', '#d1dbdf', '#d4dadc'],
-  // OpenFreeMap dark paints water and waterways rgb(27,27,29) on an rgb(12,12,12) background.
-  // Nearly black, which is why a blue ramp was never at risk of reading as a river there.
-  '#1b1f27': ['#1b1b1d'],
-};
-
-const ROAD: Record<string, string[]> = {
-  '#f4f4f1': ['#ffffff', '#f8f4f0', '#e0e0e0', '#d5d5d5', '#838383', '#666666'],
-  '#1b1f27': ['#0c0c0c', '#2a2e37'],
-};
+import {
+  BASEMAP_ROAD,
+  BASEMAP_WATER,
+  MAP_SURFACE,
+  MODE_ALPHA,
+  PALETTES,
+  type Theme,
+} from '../app/src/lib/palette.js';
 
 // ---- colour space ------------------------------------------------------------------------
 
@@ -176,12 +154,19 @@ const MIN_ROAD_SEPARATION_CVD = 7;
  * Every water and contrast check below therefore runs on the blended colour. It is the single
  * change that makes the checker agree with what is on screen.
  */
-const HAIRLINE_ALPHA = 0.6;
+const COVERAGE_AT_MIN_WIDTH = 0.9;
 
-const overSurface = (hex: string, surface: string): string => {
+/** Which palette a surface belongs to. */
+const themeOf = (surface: string): Theme => (surface === MAP_SURFACE.light ? 'light' : 'dark');
+
+/** What a line of this mode actually puts on screen once width and opacity are applied. */
+const effectiveAlpha = (theme: Theme, mode: 'exploration' | 'heatmap'): number =>
+  (MODE_ALPHA[theme][mode] / 255) * COVERAGE_AT_MIN_WIDTH;
+
+const blend = (hex: string, surface: string, alpha: number): string => {
   const c = hexToRgb(hex);
   const s = hexToRgb(surface);
-  return rgbToHex(c.map((v, i) => v * HAIRLINE_ALPHA + s[i] * (1 - HAIRLINE_ALPHA)) as RGB);
+  return rgbToHex(c.map((v, i) => v * alpha + s[i] * (1 - alpha)) as RGB);
 };
 /**
  * Water is checked two ways, because a 1.2px line is read by hue long before anyone measures a
@@ -199,6 +184,13 @@ const MIN_WATER_HUE_DISTANCE = 40;
  * measurement behind "hard to see in general".
  */
 const MIN_HAIRLINE_CONTRAST = 2.2;
+
+/**
+ * How much of a line's own colour survives at `widthMinPixels`. At the old 1.2px a line was
+ * mostly the surface showing through its own antialiasing; at 2.4px the middle of the stroke is
+ * fully covered and only the edges feather, so the colour on screen is close to the colour in
+ * the palette.
+ */
 /**
  * Lower than the water floor, and deliberately so. Roads are neutral greys, so at the mid
  * lightnesses a ramp has to pass through, the only thing separating a line from a road casing
@@ -239,8 +231,9 @@ function checkRamp(
   ramp: string[],
   surface: string,
   accent: string | null,
-  opts: { gradient?: boolean } = {},
+  opts: { gradient?: boolean; alpha?: number } = {},
 ): Report {
+  const alpha = opts.alpha ?? COVERAGE_AT_MIN_WIDTH;
   const lines: string[] = [];
   let ok = true;
   const fail = (s: string) => {
@@ -269,7 +262,7 @@ function checkRamp(
   if (spread <= MAX_HUE_SPREAD) pass(`single hue (spread ${spread.toFixed(1)}deg)`);
   else fail(`hue spread ${spread.toFixed(1)}deg > ${MAX_HUE_SPREAD}`);
 
-  const hairline = ramp.map((c) => overSurface(c, surface));
+  const hairline = ramp.map((c) => blend(c, surface, alpha));
   const contrasts = ramp.map((c) => contrast(c, surface));
   const worstContrast = Math.min(...contrasts);
   if (worstContrast >= MIN_SURFACE_CONTRAST)
@@ -279,12 +272,12 @@ function checkRamp(
   const hairContrast = Math.min(...hairline.map((c) => contrast(c, surface)));
   const allowance = ALLOWANCES[`${name}|hairline`];
   if (hairContrast >= MIN_HAIRLINE_CONTRAST)
-    pass(`weakest step still reads at 1.2px hairline width (${hairContrast.toFixed(2)}:1)`);
+    pass(`weakest step still reads at the width and opacity it paints with (${hairContrast.toFixed(2)}:1)`);
   else if (allowance)
     lines.push(`  ~~   allowed: hairline width gives ${hairContrast.toFixed(2)}:1 -- ${allowance}`);
   else
     fail(
-      `weakest step washes out at 1.2px hairline width: ${hairContrast.toFixed(2)}:1, under ${MIN_HAIRLINE_CONTRAST}:1`,
+      `weakest step washes out at the width and opacity it paints with: ${hairContrast.toFixed(2)}:1, under ${MIN_HAIRLINE_CONTRAST}:1`,
     );
 
   if (accent) {
@@ -295,7 +288,7 @@ function checkRamp(
     else fail(`accent ${accent} is only ${worst.toFixed(1)} from a step`);
   }
 
-  const water = WATER[surface] ?? [];
+  const water = BASEMAP_WATER[themeOf(surface)];
   if (water.length) {
     let worstNormal = Infinity;
     let worstCvd = Infinity;
@@ -329,7 +322,7 @@ function checkRamp(
     else fail(`hue is only ${closestHue.toFixed(0)}deg off the water hue: a thin line will read as a waterway`);
   }
 
-  const road = ROAD[surface] ?? [];
+  const road = BASEMAP_ROAD[themeOf(surface)];
   if (road.length) {
     let worstNormal = Infinity;
     let worstCvd = Infinity;
@@ -379,14 +372,18 @@ const rampFor = (h: number, topL: number, gap: number, steps: number, chromaScal
 function search(): void {
   const surface = MAP_SURFACE.light;
   const accent = PALETTES.light.frontier;
-  const water = WATER[surface];
-  const road = ROAD[surface];
+  const water = BASEMAP_WATER[themeOf(surface)];
+  const road = BASEMAP_ROAD[themeOf(surface)];
 
   /** Every score that matters for one candidate ramp, so nothing is hidden behind a boolean. */
   const score = (ramp: string[]) => ({
-    hair: Math.min(...ramp.map((c) => contrast(overSurface(c, surface), surface))),
+    hair: Math.min(
+      ...ramp.map((c) => contrast(blend(c, surface, effectiveAlpha(themeOf(surface), 'exploration')), surface)),
+    ),
     water: Math.min(
-      ...ramp.flatMap((s) => water.map((w) => deltaE(overSurface(s, surface), w))),
+      ...ramp.flatMap((s) =>
+        water.map((w: string) => deltaE(blend(s, surface, effectiveAlpha(themeOf(surface), 'exploration')), w)),
+      ),
     ),
     road: Math.min(...ramp.flatMap((s) => road.map((r) => worstDeltaE(s, r)))),
     accent: Math.min(...ramp.map((s) => worstDeltaE(s, accent))),
@@ -449,10 +446,10 @@ function checkAll(): void {
   const reports = [
     // exploration[0] is the frontier accent and exploration[4] repeats step 3, so the ramp
     // proper is entries 1..3 -- see the Palette docblock in theme.ts.
-    checkRamp('exploration repeat ramp (dark)', PALETTES.dark.exploration.slice(1, 4), MAP_SURFACE.dark, PALETTES.dark.frontier),
-    checkRamp('heatmap ramp (dark)', PALETTES.dark.heatmap, MAP_SURFACE.dark, null),
-    checkRamp('exploration repeat ramp (light)', PALETTES.light.exploration.slice(1, 4), MAP_SURFACE.light, PALETTES.light.frontier),
-    checkRamp('heatmap ramp (light)', PALETTES.light.heatmap, MAP_SURFACE.light, null),
+    checkRamp('exploration repeat ramp (dark)', PALETTES.dark.exploration.slice(1, 4), MAP_SURFACE.dark, PALETTES.dark.frontier, { alpha: effectiveAlpha('dark', 'exploration') }),
+    checkRamp('heatmap ramp (dark)', PALETTES.dark.heatmap, MAP_SURFACE.dark, null, { alpha: effectiveAlpha('dark', 'heatmap') }),
+    checkRamp('exploration repeat ramp (light)', PALETTES.light.exploration.slice(1, 4), MAP_SURFACE.light, PALETTES.light.frontier, { alpha: effectiveAlpha('light', 'exploration') }),
+    checkRamp('heatmap ramp (light)', PALETTES.light.heatmap, MAP_SURFACE.light, null, { alpha: effectiveAlpha('light', 'heatmap') }),
     checkRamp('continuous gradient (dark)', PALETTES.dark.gradient, MAP_SURFACE.dark, PALETTES.dark.frontier, { gradient: true }),
     checkRamp('continuous gradient (light)', PALETTES.light.gradient, MAP_SURFACE.light, PALETTES.light.frontier, { gradient: true }),
   ];

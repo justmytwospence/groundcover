@@ -144,7 +144,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     const deck = deckRef.current;
     const g = geom.current;
     if (!deck || !g || !colorsRef.current) return;
-    const heat = useStore.getState().mode === 'heatmap';
+    const { mode: activeMode, theme: activeTheme } = useStore.getState();
+    const heat = activeMode === 'heatmap';
 
     const coverage = new LineLayer({
       id: 'coverage',
@@ -158,18 +159,27 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
       },
       widthUnits: 'meters',
       getWidth: 7,
-      widthMinPixels: 1.2,
+      // 1.2 was a hairline, and a hairline is mostly the surface: antialiasing blends a
+      // sub-pixel line toward whatever is under it, which cost the colour most of its
+      // saturation and left coverage looking like the basemap's own thin features. 2.4 is still
+      // a fine line at city zoom -- it does not blur neighbouring streets into one another --
+      // but it puts enough pixels down for the colour to actually be the colour.
+      widthMinPixels: 2.4,
       widthMaxPixels: 8,
       pickable: true,
-      // Additive blending in heatmap mode so overlapping density accumulates into a glow.
-      parameters: heat
-        ? ({
-            blend: true,
-            blendColorSrcFactor: 'src-alpha',
-            blendColorDstFactor: 'one',
-            blendColorOperation: 'add',
-          } as const)
-        : {},
+      // Additive blending in heatmap mode so overlapping density accumulates into a glow --
+      // but only on the dark surface. Adding light to a near-white map drives every overlap
+      // toward white, so on light the busiest ground came out the faintest: the exact inverse
+      // of what the mode is for. Light composites normally and leans on MODE_ALPHA instead.
+      parameters:
+        heat && activeTheme === 'dark'
+          ? ({
+              blend: true,
+              blendColorSrcFactor: 'src-alpha',
+              blendColorDstFactor: 'one',
+              blendColorOperation: 'add',
+            } as const)
+          : {},
       updateTriggers: { getColor: colorVersion.current },
     });
 
@@ -585,7 +595,9 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     };
   }, []);
 
-  useEffect(rebuild, [mode]);
+  // Theme as well as mode: the heatmap's blend mode now depends on the surface, so a theme
+  // flip has to rebuild the layer and not just recolour it.
+  useEffect(rebuild, [mode, theme]);
 
   /**
    * Relief shading from a raster-dem source.

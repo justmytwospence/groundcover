@@ -18,6 +18,7 @@ import {
   type BlockRef,
   type Manifest,
 } from '@um/ledger';
+import { MODE_ALPHA, PALETTES } from '../lib/palette.js';
 import { pickSource, type ArtifactSource } from './artifactSource.js';
 import type {
   GroupRow,
@@ -56,20 +57,15 @@ function sampleRamp(stops: [number, number, number][], t: number): [number, numb
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
-const GRADIENT = {
-  dark: {
-    frontier: hex('#eda100'),
-    repeat: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'].map(hex),
-    heat: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'].map(hex),
-  },
-  light: {
-    frontier: hex('#c07a00'),
-    repeat: ['#4a86cf', '#3d78bd', '#2f6aa8', '#245f9e', '#164679', '#0f3557'].map(hex),
-    heat: ['#4a86cf', '#3372b5', '#245f9e', '#164679', '#092c52'].map(hex),
-  },
-} as const;
-const EXPLORATION_ALPHA = 255;
-const HEATMAP_ALPHA = 90;
+/**
+ * Ramps come from lib/palette.ts rather than a copy kept here. The copy that used to live in
+ * this file was the one that actually painted the map, so a palette change validated against
+ * the other definitions could -- and did -- ship without altering a single pixel.
+ */
+const rampsFor = (theme: 'dark' | 'light') => {
+  const p = PALETTES[theme] ?? PALETTES.dark;
+  return { frontier: hex(p.frontier), repeat: p.gradient.map(hex), heat: p.heatmap.map(hex) };
+};
 
 
 // ---------------------------------------------------------------------------------------
@@ -346,10 +342,11 @@ function writeColors(
   reverse: boolean,
   maxVisit: number,
 ): void {
-  const g = GRADIENT[theme] ?? GRADIENT.dark;
+  const surface: 'dark' | 'light' = theme === 'light' ? 'light' : 'dark';
+  const g = rampsFor(surface);
   const heat = mode === 'heatmap';
   const stops = heat ? g.heat : g.repeat;
-  const alpha = heat ? HEATMAP_ALPHA : EXPLORATION_ALPHA;
+  const alpha = heat ? MODE_ALPHA[surface].heatmap : MODE_ALPHA[surface].exploration;
   // Exploration reserves one visit for the frontier, so the ramp covers two upwards; the
   // heatmap has no reserved accent and spans the whole range.
   const lo = heat ? 1 : 2;

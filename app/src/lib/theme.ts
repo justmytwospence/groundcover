@@ -11,7 +11,8 @@
  * or in theme.css and re-run it; do not eyeball the result.
  */
 
-export type Theme = 'dark' | 'light';
+export type { Theme } from './palette.js';
+import type { Theme } from './palette.js';
 
 /**
  * What the user asked for, as distinct from what is currently on screen.
@@ -24,48 +25,8 @@ export type ThemeChoice = 'system' | Theme;
 
 const KEY = 'um.theme';
 
-/** RGB triples the map worker paints with, parallel to the CSS custom properties. */
-export interface Palette {
-  exploration: string[];
-  heatmap: string[];
-  /** Reserved accent for ground covered exactly once. */
-  frontier: string;
-  /**
-   * Continuous ramp for repeat visits, sampled rather than banded, and rescaled each query to
-   * whatever the busiest visible ground actually is.
-   *
-   * Ends validated against their own surface: monotone lightness, a single hue (3 degrees on
-   * dark, 5 on light), and the pale end clearing 3:1 -- 3.06:1 dark, 3.40:1 light. The
-   * adjacent-lightness-gap rule is deliberately not applied: it exists so discrete bands stay
-   * telling apart, and a gradient has no bands to tell apart.
-   *
-   * The frontier stays a separate reserved colour rather than becoming the ramp's first stop.
-   * A gold-to-blue ramp cannot be monotone in lightness on a dark surface -- gold sits near the
-   * top of the blue range, so hue and magnitude end up fighting -- and a ramp you cannot read
-   * by brightness is not a ramp.
-   */
-  gradient: string[];
-}
-
-/**
- * Exploration: a reserved accent for ground visited exactly once, then a single-hue ordinal
- * ramp for depth. The last entry repeats the top step because the band function has one more
- * band than the ramp has distinct steps.
- */
-export const PALETTES: Record<Theme, Palette> = {
-  dark: {
-    exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'],
-    heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
-    frontier: '#eda100',
-    gradient: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
-  },
-  light: {
-    exploration: ['#c07a00', '#5b52e8', '#3822a0', '#1c0f5e', '#1c0f5e'],
-    heatmap: ['#5b52e8', '#4a34c9', '#3822a0', '#261577', '#170a4d'],
-    frontier: '#c07a00',
-    gradient: ['#5b52e8', '#5346d9', '#4a34c9', '#4029b4', '#3822a0', '#2b1a80'],
-  },
-};
+export type { Palette } from './palette.js';
+export { MAP_SURFACE, MODE_ALPHA, PALETTES } from './palette.js';
 
 /**
  * Free public elevation tiles from AWS Open Data, in Mapzen's "terrarium" encoding.
