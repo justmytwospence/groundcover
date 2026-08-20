@@ -16,7 +16,7 @@ import { LineLayer, PathLayer } from '@deck.gl/layers';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { lngToX, latToY } from '@um/ledger';
 import { readInitialView, useStore } from '../state/store.js';
-import { BASEMAP_STYLE, TERRAIN_TILES, type Theme } from '../lib/theme.js';
+import { BASEMAP_STYLES, TERRAIN_TILES, type Theme } from '../lib/theme.js';
 import type { Viewport } from '../worker/protocol.js';
 
 const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
@@ -32,11 +32,24 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
 });
 
 /**
- * How hard to chase a basemap style that failed to load, before settling for a flat background.
- * The tile host answers with an occasional 503, and one of those should not cost the basemap.
+ * How hard to chase a basemap before moving to the next provider, and then to a flat background.
+ *
+ * Two distinct failures have to be caught, because only one of them announces itself:
+ *
+ *  - the style request fails outright (the host answers an occasional 503), which raises an
+ *    error carrying the URL, and
+ *  - the style loads, its sources are present, and no tile is ever fetched. Nothing is raised;
+ *    the map simply stays empty. Only a watchdog finds this one, and it is the failure that
+ *    was leaving the published map a flat field with routes floating on it.
  */
-const STYLE_RETRIES = 3;
+const STYLE_RETRIES = 1;
 const STYLE_RETRY_MS = 600;
+/**
+ * How long a style gets to load a source before it is treated as dead. Generous: this is the
+ * style document, its sprites and its first tiles over someone's phone connection, and a false
+ * positive costs a visible reload of the basemap.
+ */
+const STYLE_WATCHDOG_MS = 12_000;
 
 /**
  * Padding every automatic fit leaves around what it frames, in pixels.
@@ -118,6 +131,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
    * cell: the framed box ended up several zoom levels out, with the routes as specks.
    */
   const framed = useRef<[number, number, number, number] | null>(null);
+  /** Which entry of BASEMAP_STYLES is currently serving. Survives a theme change and a remount. */
+  const styleIndex = useRef(0);
   const colorsRef = useRef<Uint8Array | null>(null);
   const colorVersion = useRef(0);
   const activePath = useRef<Array<[number, number]> | null>(null);
@@ -183,7 +198,7 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     const saved = readInitialView();
     const map = new maplibregl.Map({
       container: el,
-      style: BASEMAP_STYLE[useStore.getState().theme],
+      style: BASEMAP_STYLES[useStore.getState().theme][styleIndex.current],
       // An extent is framed by the constructor, which has the container size in hand; a centre
       // and zoom are set directly. Either way the map opens already there, with no flight in
       // from the default view.
@@ -208,33 +223,96 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     map.touchZoomRotate.disableRotation();
     map.touchPitch.disable();
 
-    // A missing basemap must not take the coverage layer down with it -- but only the style
-    // document failing to arrive justifies replacing it with a blank one, and only after a
-    // retry: the tile host answers with an occasional 503, and treating one as permanent left
-    // the map a flat field with the routes floating on it and no way back except a reload.
+    // A missing basemap must not take the coverage layer down with it, and a flat grey field is
+    // the last resort rather than the first response. Walk the providers, giving each one a
+    // retry, and only then give up. See BASEMAP_STYLES in lib/theme.ts.
     //
-    // Matching on the failed request's URL, never on the error text. A substring test for
-    // "style" also caught the relief layer's tile errors -- which is how switching Terrain on
-    // blanked the basemap -- and, worse, caught MapLibre's own "Style is not done loading",
-    // which this handler's own setStyle provokes: error, retry, error, forever.
-    const styleUrls: string[] = Object.values(BASEMAP_STYLE);
+    // Failures are matched on the failed request's URL, never on the error text. A substring
+    // test for "style" also caught the relief layer's tile errors -- which is how switching
+    // Terrain on blanked the basemap -- and MapLibre's own "Style is not done loading", which
+    // this handler's setStyle provokes: error, retry, error, forever.
     let styleTries = 0;
-    map.on('error', (e) => {
-      const url = (e.error as { url?: string } | undefined)?.url ?? '';
-      if (!styleUrls.includes(url)) return;
-      const theme = useStore.getState().theme;
-      if (styleTries < STYLE_RETRIES) {
-        styleTries += 1;
-        window.setTimeout(() => map.setStyle(BASEMAP_STYLE[theme]), STYLE_RETRY_MS * styleTries);
+    let watchdog: number | undefined;
+
+    const styleList = () => BASEMAP_STYLES[useStore.getState().theme];
+
+    /** Move to the next provider, or to the blank background once they are all spent. */
+    const nextProvider = (reason: string) => {
+      window.clearTimeout(watchdog);
+      const list = styleList();
+      const next = styleIndex.current + 1;
+      if (import.meta.env.DEV) console.warn(`[um] basemap ${reason}; trying provider ${next}`);
+      if (next >= list.length) {
+        map.setStyle(fallbackStyle(useStore.getState().theme));
         return;
       }
-      map.setStyle(fallbackStyle(theme));
+      styleIndex.current = next;
+      styleTries = 0;
+      applyStyle();
+    };
+
+    /**
+     * Has any of this style's own sources finished loading? The health check for a provider,
+     * and deliberately NOT `isStyleLoaded()`: that also reads false whenever the browser has
+     * simply not painted yet -- a background tab, an occluded window -- because MapLibre loads
+     * tiles from its render loop and a throttled `requestAnimationFrame` means no render. A
+     * watchdog on that would cycle away from a perfectly good provider for a viewer who had
+     * merely switched tabs.
+     */
+    let sourceLoaded = false;
+
+    const armWatchdog = () => {
+      window.clearTimeout(watchdog);
+      watchdog = window.setTimeout(() => {
+        if (sourceLoaded) return;
+        // Nothing has painted yet, so nothing has been asked of the provider and it has not
+        // failed anything. Wait for the tab to come back rather than blaming it.
+        if (document.visibilityState !== 'visible') return;
+        nextProvider('loaded no sources');
+      }, STYLE_WATCHDOG_MS);
+    };
+
+    /** Set the current provider's style and start the clock on it. */
+    const applyStyle = () => {
+      const url = styleList()[styleIndex.current];
+      if (!url) return;
+      sourceLoaded = false;
+      map.setStyle(url);
+      armWatchdog();
+    };
+
+    map.on('sourcedata', (e) => {
+      // The relief layer is an extra, not the basemap: it must not vouch for a provider.
+      if (!e.isSourceLoaded || e.sourceId === 'um-dem') return;
+      sourceLoaded = true;
+      window.clearTimeout(watchdog);
     });
-    // A style that arrived means the next failure gets its own retries rather than inheriting
-    // a budget the last one spent.
+
+    // A tab that comes back to the foreground gets its render loop, and therefore its first
+    // real chance to load a tile, so the clock starts then rather than having run down unseen.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !sourceLoaded) armWatchdog();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    map.on('error', (e) => {
+      const url = (e.error as { url?: string } | undefined)?.url ?? '';
+      if (url !== styleList()[styleIndex.current]) return;
+      if (styleTries < STYLE_RETRIES) {
+        styleTries += 1;
+        window.setTimeout(applyStyle, STYLE_RETRY_MS * styleTries);
+        return;
+      }
+      nextProvider('failed to load');
+    });
+
+    // Arrived: let the next failure spend its own budget rather than inherit what this one used.
     map.on('styledata', () => {
       if (map.isStyleLoaded()) styleTries = 0;
     });
+
+    // The constructor started the first provider loading, so it needs the same clock.
+    armWatchdog();
 
     const deck = new Deck({
       canvas: deckCanvas.current,
@@ -489,6 +567,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     // Hand over handles even if the basemap never loads.
     const t = window.setTimeout(() => onReady(handles), 4000);
     return () => {
+      window.clearTimeout(watchdog);
+      document.removeEventListener('visibilitychange', onVisible);
       ro.disconnect();
       window.clearTimeout(t);
       el.removeEventListener('pointermove', onMove);
@@ -585,7 +665,10 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     }
     if (appliedTheme.current === theme) return;
     appliedTheme.current = theme;
-    map.setStyle(BASEMAP_STYLE[theme]);
+    // Back to the preferred provider: whichever one is serving now was chosen for the old
+    // surface, and a provider that failed a minute ago may well be back.
+    styleIndex.current = 0;
+    map.setStyle(BASEMAP_STYLES[theme][0]);
   }, [theme]);
 
   return (

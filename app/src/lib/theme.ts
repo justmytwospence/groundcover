@@ -79,11 +79,29 @@ export const PALETTES: Record<Theme, Palette> = {
 export const TERRAIN_TILES =
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 
-/** The basemap that goes with each surface. */
-export const BASEMAP_STYLE: Record<Theme, string> = {
-  dark: 'https://tiles.openfreemap.org/styles/dark',
-  light: 'https://tiles.openfreemap.org/styles/positron',
+/**
+ * The basemaps that go with each surface, best first.
+ *
+ * A list rather than one URL because a basemap is the one part of this app that depends on
+ * somebody else's server staying up, and when it does not the map becomes a flat field with
+ * routes floating on it -- which reads as "this is broken" rather than "the tiles are late".
+ * Two independent hosts, both free and key-less, both Positron-family so the palette in
+ * section 6.2 holds either way. MapView walks the list and only settles for a blank background
+ * when every entry has failed.
+ */
+export const BASEMAP_STYLES: Record<Theme, readonly string[]> = {
+  dark: [
+    'https://tiles.openfreemap.org/styles/dark',
+    'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  ],
+  light: [
+    'https://tiles.openfreemap.org/styles/positron',
+    'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  ],
 };
+
+/** Every basemap host, for the connect-src of both deployments. Keep the CSPs in step. */
+export const BASEMAP_HOSTS = ['https://tiles.openfreemap.org', 'https://*.cartocdn.com'];
 
 export function systemTheme(): Theme {
   return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';

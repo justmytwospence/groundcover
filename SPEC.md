@@ -731,6 +731,26 @@ Rules that follow from this and must be honored:
 
 ### 6.3 Map layers
 
+**The basemap has two providers, tried in order** (`BASEMAP_STYLES`, `app/src/lib/theme.ts`):
+OpenFreeMap first, CARTO's Positron / Dark Matter second. Both are free and key-less, and both
+are Positron-family so the palette in 6.2 holds either way. It is the one part of this app that
+depends on somebody else's server staying up, and when that server is down the map becomes a
+flat field with routes floating on it — which reads as "this is broken" rather than "the tiles
+are late".
+
+`MapView` walks the list on two distinct failures, because only one of them announces itself:
+the style request failing (matched on the **failed request's URL**, never on error text — a
+substring test for "style" also catches the relief layer's tile errors and MapLibre's own
+"Style is not done loading", which the handler's own `setStyle` provokes), and a style that
+loads but never loads a source, which is caught by a watchdog. The watchdog waits for a real
+`sourcedata` event rather than `isStyleLoaded()`, and stands down while the tab is hidden:
+MapLibre loads tiles from its render loop, so a backgrounded tab legitimately loads nothing and
+must not be mistaken for a dead provider. The blank background remains, as the last resort.
+
+Both deployments' CSPs list both hosts in `connect-src`; they have to be kept in step with the
+list (`vercel.json`, `scripts/publish/stage.ts`).
+
+
 Basemap: MapLibre GL JS with the OpenFreeMap Dark style
 (`https://tiles.openfreemap.org/styles/dark`). Free, unlimited, no API key. If it fails to
 load, fall back to a flat `--map-surface` background and show a small non-blocking notice —

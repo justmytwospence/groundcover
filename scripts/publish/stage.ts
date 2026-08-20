@@ -150,8 +150,10 @@ async function main(): Promise<void> {
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     // Strava is deliberately absent: this deployment holds no credentials and makes no API
-    // call from the browser. The blob origin serves the artifacts.
-    "connect-src 'self' https://*.public.blob.vercel-storage.com https://tiles.openfreemap.org https://s3.amazonaws.com",
+    // call from the browser. The blob origin serves the artifacts. Both basemap hosts are
+    // listed because the map falls through to the second when the first is down -- keep this
+    // in step with BASEMAP_STYLES in app/src/lib/theme.ts.
+    "connect-src 'self' https://*.public.blob.vercel-storage.com https://tiles.openfreemap.org https://*.cartocdn.com https://s3.amazonaws.com",
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "form-action 'none'",
