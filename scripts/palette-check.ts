@@ -178,6 +178,18 @@ const MIN_WATER_SEPARATION = 12;
 const MIN_WATER_SEPARATION_CVD = 9;
 const MIN_WATER_HUE_DISTANCE = 40;
 /**
+ * Below this OKLab chroma a colour has no hue to be confused with, so the hue-family rule is
+ * skipped for it and the distance floor above is the whole constraint.
+ *
+ * This is not a loophole, it is the rule's own precondition. The light basemap draws water in
+ * #c2c8ca..#d1dbdf -- chroma 0.007 to 0.012, faint but consistently blue-grey at 220-224deg,
+ * and that is the hue a thin blue line gets mistaken for. The dark basemap draws it in #1b1b1d:
+ * rgb(27, 27, 29), chroma 0.0038, a grey whose "hue" of 286deg is what atan2 returns for a
+ * two-count blue tint. Measuring hue distance from that is measuring rounding noise, and it
+ * fails whichever hues the noise happens to point away from.
+ */
+const MIN_HUE_BEARING_CHROMA = 0.005;
+/**
  * A hairline has to be visible before anything else about it matters. 2.2:1 is below the 3:1
  * the nominal colours must clear -- a line thinned to sub-pixel legitimately gives some of that
  * back -- but it is well above the 1.99:1 the shipped light ramp manages, which is the
@@ -219,6 +231,13 @@ const ALLOWANCES: Record<string, string> = {
 export interface Report {
   ok: boolean;
   lines: string[];
+}
+
+/** The value after a flag, e.g. `--accent '#c07a00'`. Absent flag and bare flag both give null. */
+function argAfter(flag: string): string | null {
+  const i = process.argv.indexOf(flag);
+  const v = i < 0 ? undefined : process.argv[i + 1];
+  return v && !v.startsWith('--') ? v : null;
 }
 
 /**
@@ -307,17 +326,32 @@ function checkRamp(
     else
       fail(`reads as water: ${pair} is ${worstNormal.toFixed(1)} normal / ${worstCvd.toFixed(1)} cvd`);
 
-    // Hue family, not just distance.
-    const waterHues = water.map((w) => hueOf(oklab(hexToRgb(w))));
+    // Hue family, not just distance -- but only against water that has a hue at all.
+    const chromatic = water.filter((w) => {
+      const [, a, b] = oklab(hexToRgb(w));
+      return Math.hypot(a, b) >= MIN_HUE_BEARING_CHROMA;
+    });
+    const waterHues = chromatic.map((w) => hueOf(oklab(hexToRgb(w))));
     let closestHue = 360;
     for (const step of hairline) {
       const h = hueOf(oklab(hexToRgb(step)));
       for (const wh of waterHues) {
-        const d = Math.abs(((h - wh + 540) % 360) - 180);
-        closestHue = Math.min(closestHue, 180 - d);
+        // Shortest way round the hue circle. `+ 540` rather than `+ 180` because hue difference
+        // runs to -360 and JS `%` keeps the sign of its left operand, so the smaller offset
+        // reports impossible distances above 180 for the pairs that wrap.
+        //
+        // This line used to end `Math.min(closestHue, 180 - ang)`, which inverted the whole
+        // rule: it scored two *identical* hues as 180deg apart and opposite ones as 0. It
+        // never rejected anything -- the blue that "read as a river" was caught by the
+        // distance floor above, not by this -- and it rejected every warm hue precisely
+        // because warm is as far from blue-grey water as a hue can get.
+        const ang = Math.abs(((h - wh + 540) % 360) - 180);
+        closestHue = Math.min(closestHue, ang);
       }
     }
-    if (closestHue >= MIN_WATER_HUE_DISTANCE)
+    if (waterHues.length === 0)
+      lines.push(`  ..   hue rule not applied: this basemap's water is achromatic (chroma < ${MIN_HUE_BEARING_CHROMA})`);
+    else if (closestHue >= MIN_WATER_HUE_DISTANCE)
       pass(`hue is ${closestHue.toFixed(0)}deg off the water hue (>= ${MIN_WATER_HUE_DISTANCE})`);
     else fail(`hue is only ${closestHue.toFixed(0)}deg off the water hue: a thin line will read as a waterway`);
   }
@@ -370,10 +404,14 @@ const rampFor = (h: number, topL: number, gap: number, steps: number, chromaScal
  * water, because that is the complaint this search exists to answer.
  */
 function search(): void {
-  const surface = MAP_SURFACE.light;
-  const accent = PALETTES.light.frontier;
-  const water = BASEMAP_WATER[themeOf(surface)];
-  const road = BASEMAP_ROAD[themeOf(surface)];
+  // Both surfaces, because the ramp is no longer a light-mode-only problem: the warm ramp in
+  // section 6.2 had to be selected twice, and a search that can only see the light surface is a
+  // search that cannot answer half the question it is asked.
+  const theme: Theme = process.argv.includes('--dark') ? 'dark' : 'light';
+  const surface = MAP_SURFACE[theme];
+  const accent = argAfter('--accent') ?? PALETTES[theme].frontier;
+  const water = BASEMAP_WATER[theme];
+  const road = BASEMAP_ROAD[theme];
 
   /** Every score that matters for one candidate ramp, so nothing is hidden behind a boolean. */
   const score = (ramp: string[]) => ({
@@ -397,8 +435,17 @@ function search(): void {
   type Row = { h: number; topL: number; gap: number; scale: number; ramp: string[]; s: ReturnType<typeof score> };
   const best = new Map<number, Row>();
 
+  // A dark surface reads brighter as more, so its ramp lives at the top of the lightness range
+  // and is stored ascending; a light surface reads the other way and lives lower down. Searching
+  // one set of ceilings for both would simply find nothing on whichever surface it was not
+  // written for.
+  const ceilings =
+    theme === 'dark'
+      ? [0.68, 0.7, 0.72, 0.75, 0.78, 0.8, 0.82, 0.85]
+      : [0.42, 0.45, 0.48, 0.5, 0.52, 0.55, 0.58, 0.6, 0.62];
+
   for (let h = 0; h < 360; h += 2) {
-    for (const topL of [0.42, 0.45, 0.48, 0.5, 0.52, 0.55, 0.58, 0.6, 0.62]) {
+    for (const topL of ceilings) {
       for (const gap of [0.05, 0.06, 0.07, 0.08, 0.09]) {
         for (const scale of [0.9, 1]) {
           const ramp = rampFor(h, topL, gap, 5, scale);
@@ -467,7 +514,11 @@ function explain(): void {
   const arg = process.argv[process.argv.indexOf('explain') + 1] ?? '';
   const ramp = arg.split(',').map((c) => c.trim()).filter(Boolean);
   const theme: Theme = process.argv.includes('--dark') ? 'dark' : 'light';
-  const r = checkRamp(`candidate (${ramp.length} steps)`, ramp, MAP_SURFACE[theme], PALETTES[theme].frontier, {
+  // Exploration has two reserved accents now, so "the accent" is a question rather than a
+  // constant: a candidate ramp has to clear the frontier AND the one-way colour, and only the
+  // caller knows which one it is being scored against.
+  const accent = argAfter('--accent') ?? PALETTES[theme].frontier;
+  const r = checkRamp(`candidate (${ramp.length} steps)`, ramp, MAP_SURFACE[theme], accent, {
     gradient: process.argv.includes('--gradient'),
   });
   console.log(r.lines.join('\n'));

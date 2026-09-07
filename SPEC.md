@@ -706,11 +706,24 @@ accent had to change too: `#eda100` sits at 1.9:1 on a light map, a hairline nob
 categorical chart trio is the one group that needs no second set -- it passes all-pairs CVD and
 the normal-vision floor on both surfaces.
 
+**The water hue-family rule was inverted from the day it was written, and is fixed.** It
+computed `180 - angle`, scoring two *identical* hues as 180 degrees apart and opposite ones as
+0. It consequently never rejected anything -- the blue that "read as a river" was caught by the
+distance floor, not by this -- while rejecting every warm hue precisely because warm is as far
+from blue-grey water as a hue can get. The rule now measures the real angular separation, and
+the shipped light ramp passes it honestly at 57 degrees rather than by accident at 114. It is
+also gated on chroma: the rule asks whether a line will be mistaken for a waterway *by hue*, so
+it is skipped where the basemap's water has no hue to be mistaken for. Light water is
+`#c2c8ca`..`#d1dbdf`, chroma 0.007-0.012 and consistently blue-grey at 220-224 degrees; dark
+water is `#1b1b1d`, chroma 0.0038, a grey whose 286-degree "hue" is what `atan2` returns for a
+two-count blue tint. Measuring against that is measuring rounding noise.
+
 **`npm run palette` is the checker**, and it is in the repository now
 (`scripts/palette-check.ts`) rather than being a tool someone once ran elsewhere. It re-derives
 every number in this section from `app/src/lib/theme.ts`, so "re-validate rather than eyeballing"
 is an instruction that can actually be followed; `npm run palette -- search` ranks candidate hues
-when a constraint changes, and `-- explain '#hex,#hex'` scores one candidate. Known deviations
+when a constraint changes (`--dark` for the dark surface, `--accent '#hex'` to score against
+something other than the frontier), and `-- explain '#hex,#hex'` scores one candidate. Known deviations
 are named in an `ALLOWANCES` table with their reason rather than hidden by loosening a
 threshold: the dark ramps' recessive step is a 1.90:1 hairline, left alone because that step's
 job is to recede and no one has reported it (`#256abf` -> `#3480da` would clear the bar at
