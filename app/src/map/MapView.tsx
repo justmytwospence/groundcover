@@ -339,6 +339,25 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
     });
     deckRef.current = deck;
 
+    /**
+     * Copy MapLibre's camera onto deck and draw it, both inside MapLibre's own frame.
+     *
+     * This hangs off 'render' rather than 'move', and forces the draw itself, because deck
+     * otherwise paints from its own requestAnimationFrame callback. That callback is registered
+     * when the Deck is constructed and re-registers itself at the end of every frame, so it
+     * keeps a slot ahead of MapLibre's for the life of the map. MapLibre applies a drag from
+     * its render task queue, which means frame N's camera does not exist until part way through
+     * frame N -- deck had already painted frame N with frame N-1's camera, and only caught up
+     * on N+1. One frame is invisible on a still map and reads as the routes sliding loosely
+     * over the basemap the moment you pan: measured at a steady 11.5 px behind through a
+     * 700 px/s pan, and 21 px behind on the frames where deck's callback slipped a further slot.
+     *
+     * MapLibre fires 'render' immediately after painter.render(), so setting the camera and
+     * drawing from here puts both canvases on one camera within one frame. redraw() with no
+     * reason still no-ops when nothing has changed, so the frames MapLibre paints for tile
+     * fades and label transitions cost nothing, and deck's own loop finds the flags already
+     * cleared rather than drawing the same thing twice.
+     */
     const sync = () => {
       const c = map.getCenter();
       deck.setProps({
@@ -350,9 +369,9 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
           pitch: map.getPitch(),
         },
       });
+      if (deck.isInitialized) deck.redraw();
     };
-    // 'move' fires continuously through animated flights, so the two stay locked together.
-    map.on('move', sync);
+    map.on('render', sync);
     // Only a gesture carries an originalEvent; the app's own eases do not. Once the viewer has
     // moved the map, where they put it outranks whatever the app last framed.
     map.on('movestart', (e) => {
