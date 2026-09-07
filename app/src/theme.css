@@ -283,14 +283,11 @@ button.ghost:hover {
 .stats-drawer {
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .stats-drawer-body {
-  flex: 1 1 auto;
-  overflow-y: auto;
   overflow-x: hidden;
-  /* Bleed to the panel edge so scrollbar and hover rows reach it, keeping the inner padding. */
+  /* Bleed to the panel edge so hover rows reach it, keeping the inner padding. */
   margin: 0 -14px;
   padding: 0 14px;
 }
@@ -1048,6 +1045,9 @@ button.chart-toggle {
 .rail .panel,
 .transport .panel {
   position: static;
+  /* A flex item with a z-index creates a stacking context even when statically positioned, so
+     the floating `.panel` z-index would still paint these over the sticky foot below them. */
+  z-index: auto;
   width: auto;
   max-width: none;
   background: none;
@@ -1062,6 +1062,16 @@ button.chart-toggle {
 .rail .panel + .panel {
   border-top: 1px solid var(--panel-border);
   padding-top: 12px;
+}
+
+/* The rail scrolls as one column, so nothing in it is allowed to shrink.
+   A flex column shrinks its items to fit before it will overflow, and `min-height: auto`
+   only floors an item at its content height while that item's own overflow is `visible`.
+   The search box (overflow: hidden) and the charts (overflow: auto) both opted out of that
+   floor, so they were compressed to literally zero pixels -- present, focusable, invisible --
+   while the rail reported nothing to scroll. Growing is still fine; shrinking is not. */
+.rail > * {
+  flex-shrink: 0;
 }
 
 .rail-row {
@@ -1084,6 +1094,14 @@ button.chart-toggle {
 /* Pushed to the bottom of the rail: identity and account, below the controls. */
 .rail-foot {
   margin-top: auto;
+  /* Sticky, not merely last: this is where "Your data" -- and behind it the only control that
+     fetches new activities -- lives. Pushed below the fold by a tall filter panel or an open
+     drawer, it reads as absent rather than as scrolled away, because the rail's scrollbar is
+     the only hint it exists. */
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--rail-bg);
   padding-top: 12px;
   border-top: 1px solid var(--panel-border);
   display: flex;
@@ -1190,6 +1208,10 @@ button.chart-toggle {
 
   .rail-foot {
     margin-top: 12px;
+    /* Not sticky here. The sheet's stops already decide what is visible, and at the peek stop
+       the rail is 34px -- exactly the grab handle -- so a foot pinned to the bottom would sit
+       on top of the handle and make the sheet impossible to drag open. */
+    position: static;
   }
 
   /* The year chips scroll sideways rather than wrapping. Wrapped, they doubled
