@@ -39,7 +39,7 @@ function yearsOf(activities: { startDateLocal: string; startTs: number }[]): Map
 export function Scrubber() {
   const {
     activities, groups, t0, t1, minTs, maxTs, playing, speed, skipEmptyDays, playhead, actSpans,
-    replayReverse, skipOutsideBounds, viewBounds,
+    replayReverse, skipOutsideBounds, viewBounds, fitToSelection, fitWhilePlaying,
   } = useStore();
   const set = useStore((s) => s.set);
   const setWindow = useStore((s) => s.setWindow);
@@ -230,7 +230,22 @@ export function Scrubber() {
 
   return (
     <div className="panel" style={{ padding: '10px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+      {/* Wraps rather than squeezes. Four toggles share this row now, and a nowrap flex row
+          resolves an overflow by shrinking its items: measured at 380px, the old row was 76px
+          tall AND still clipped, because each label had wrapped its own text into a column
+          before the row would admit it had run out of width. On a phone it scrolls sideways
+          instead -- see theme.css, which does the same to the year chips for the same reason. */}
+      <div
+        className="transport-controls"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 10,
+          rowGap: 6,
+          marginBottom: 8,
+        }}
+      >
         <button
           className="ghost"
           style={{ width: 34 }}
@@ -283,6 +298,33 @@ export function Scrubber() {
           />
           <span>Skip out of view</span>
         </label>
+        {/* Lives here rather than in the stats card because this row IS the selection: the
+            brush below it and the presets under that are what "selection" means, and a switch
+            describing how the map answers them belongs beside them. */}
+        <label
+          className="check"
+          style={{ margin: 0 }}
+          title="Move the map to frame the selected window whenever it changes"
+        >
+          <input
+            type="checkbox"
+            checked={fitToSelection}
+            onChange={(e) => set({ fitToSelection: e.target.checked })}
+          />
+          <span>Fit map to selection</span>
+        </label>
+        {/* Inline rather than indented under its parent: this row is horizontal, so the
+            leading ellipsis is what carries the subordination that padding would elsewhere. */}
+        {fitToSelection && (
+          <label className="check" style={{ margin: 0 }} title="Refit on every frame of playback">
+            <input
+              type="checkbox"
+              checked={fitWhilePlaying}
+              onChange={(e) => set({ fitWhilePlaying: e.target.checked })}
+            />
+            <span>…also while playing</span>
+          </label>
+        )}
         <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           {fmt(t0)} — {fmt(playhead ?? t1)}
         </span>

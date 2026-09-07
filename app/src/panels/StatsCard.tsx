@@ -3,8 +3,7 @@ import { fmtDist, useStore } from '../state/store.js';
 import { HowItWorks } from './HowItWorks.js';
 
 export function StatsCard() {
-  const { stats, units, viewportFilter, fitToSelection, fitWhilePlaying, statsOpen, drawerOpen } =
-    useStore();
+  const { stats, units, viewportFilter, statsOpen, drawerOpen } = useStore();
   const set = useStore((s) => s.set);
   const [howOpen, setHowOpen] = useState(false);
 
@@ -63,6 +62,10 @@ export function StatsCard() {
 
             <hr className="rule" />
 
+            {/* Deliberately outside the `empty` branch above. This is the control that caused
+                the empty selection, so hiding it when the selection is empty would strand a
+                viewer who panned somewhere with no history: the numbers vanish and the switch
+                that would bring them back vanishes with them. */}
             <label className="check">
               <input
                 type="checkbox"
@@ -75,26 +78,6 @@ export function StatsCard() {
               <div style={{ color: 'var(--text-muted)', fontSize: 11, paddingLeft: 22 }}>
                 Total logged is hidden: an activity&apos;s distance has no position to clip.
               </div>
-            )}
-
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={fitToSelection}
-                onChange={(e) => set({ fitToSelection: e.target.checked })}
-              />
-              <span>Fit map to selection</span>
-            </label>
-
-            {fitToSelection && (
-              <label className="check" style={{ paddingLeft: 20 }}>
-                <input
-                  type="checkbox"
-                  checked={fitWhilePlaying}
-                  onChange={(e) => set({ fitWhilePlaying: e.target.checked })}
-                />
-                <span>…also while playing</span>
-              </label>
             )}
 
             <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center' }}>

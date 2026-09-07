@@ -929,6 +929,19 @@ tell apart rather than two, the ramp has to be named as well as the accents.
 - Readouts of the exact window start and end dates.
 - Transport controls: play/pause, speed (0.5x, 1x, 2x, 4x), and a window-mode select of
   Expanding (t0 pinned at history start, t1 advances) or Sliding (fixed-width window moves).
+- The toggles that act on the selection, in the control row above the brush: "Skip empty days",
+  "Skip out of view", and **"Fit map to selection"** with its sub-option "…also while playing".
+
+**"Fit map to selection" lives here, not in the stats card.** This row, the brush under it and
+the preset chips under that are collectively what "the selection" means, so the switch
+describing how the map answers a change of selection belongs beside the things that change it.
+The stats card keeps only the control that acts on stats.
+
+That row scrolls sideways on a phone rather than wrapping, exactly as the year chips do and for
+the same reason: wrapped, it runs to four lines at 380 px and takes a third of the map. The
+declaration that matters is `flex-shrink: 0` on its children — a nowrap flex row with shrinkable
+items does not overflow, it crushes each label's text into a vertical stack of words, which is
+what the row did before it had a class of its own (76 px tall and still clipped at 380 px).
 
 At 1x, playback replays the **whole history in about 45 seconds**, whatever it spans, pro-rated
 per frame by elapsed wall-clock milliseconds so the rate is independent of frame rate. A
@@ -956,9 +969,15 @@ contains exactly that year's activities by the athlete's own calendar, and it is
 ordinary UTC window that the fold and the scrubber handles agree on. Buckets and windows stay
 consistent because both are ultimately defined by the same per-activity data.
 
-**Viewport filter.** A "Limit stats to map view" checkbox in the stats card. Off by default,
-so panning the map never silently changes your lifetime numbers. When on, the stats card
-shows a badge and the map draws a hairline inset border to make the constraint visible.
+**Viewport filter.** A "Limit stats to map view" checkbox in the stats card — the only toggle
+that card carries, since it is the only one that acts on the numbers printed above it. Off by
+default, so panning the map never silently changes your lifetime numbers. When on, the stats
+card shows a badge and the map draws a hairline inset border to make the constraint visible.
+
+It sits outside the card's "no activities in this selection" branch deliberately. This is the
+control that can empty the selection, so hiding it when the selection is empty would strand a
+viewer who panned somewhere with no history: the numbers disappear and the switch that brings
+them back disappears with them.
 
 Only the two ground numbers can be clipped to a viewport — a site has a position, but an
 activity's recorded distance does not. So when the filter is on, distinct ground and new ground

@@ -1229,6 +1229,29 @@ button.chart-toggle {
     display: none;
   }
 
+  /* The transport's own controls, for the same reason and by the same means. Wrapping four
+     toggles plus the transport buttons runs to four lines at 380px and eats a third of the
+     map. `flex-shrink: 0` and the nowrap on the labels are what make it a scroll rather than
+     the squeeze it defaults to: without them the row stays one line wide and crushes each
+     label's text into a vertical stack of words instead. */
+  .transport .transport-controls {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .transport .transport-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .transport .transport-controls > * {
+    flex-shrink: 0;
+  }
+
+  .transport .transport-controls label.check span {
+    white-space: nowrap;
+  }
+
   .maplibregl-ctrl-bottom-right {
     /* Clear of the transport bar, which is now real chrome rather than a panel. */
     display: none;
