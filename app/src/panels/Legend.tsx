@@ -27,8 +27,9 @@ export function Legend() {
 
   const palette = PALETTES[theme];
   const exploring = mode === 'exploration';
-  // Exploration reserves one visit for the frontier, so its ramp begins at two.
-  const lo = exploring ? 2 : 1;
+  // Both ramps begin at one now. Exploration's used to begin at two, when the frontier owned
+  // every single-visit site; a first-time out-and-back is both-ways ground at a count of one.
+  const lo = 1;
   const hi = Math.max(lo, maxVisit);
   const stops = exploring ? palette.gradient : palette.heatmap;
 
@@ -37,20 +38,31 @@ export function Legend() {
       <hr className="rule" />
       <h2 style={{ margin: '0 0 8px' }}>{exploring ? 'Exploration' : 'Visits'}</h2>
 
+      {exploring &&
+        (
+          [
+            ['var(--frontier)', 'new ground', 'once'],
+            ['var(--one-way)', 'one way only', 'never back'],
+          ] as const
+        ).map(([swatch, label, note]) => (
+          <div
+            key={label}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}
+          >
+            <span
+              style={{ width: 18, height: 3, borderRadius: 2, background: swatch, flex: '0 0 auto' }}
+            />
+            <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+            <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>
+              {note}
+            </span>
+          </div>
+        ))}
+
+      {/* The ramp needs naming now that it is one of three things on the key rather than the
+          only one: in exploration mode it is specifically the both-directions ground. */}
       {exploring && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
-          <span
-            style={{
-              width: 18,
-              height: 3,
-              borderRadius: 2,
-              background: 'var(--frontier)',
-              flex: '0 0 auto',
-            }}
-          />
-          <span style={{ color: 'var(--text-secondary)' }}>new ground</span>
-          <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>once</span>
-        </div>
+        <div style={{ color: 'var(--text-secondary)', marginBottom: 5 }}>both ways</div>
       )}
 
       <div

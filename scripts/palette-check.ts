@@ -499,6 +499,18 @@ function checkAll(): void {
     checkRamp('heatmap ramp (light)', PALETTES.light.heatmap, MAP_SURFACE.light, null, { alpha: effectiveAlpha('light', 'heatmap') }),
     checkRamp('continuous gradient (dark)', PALETTES.dark.gradient, MAP_SURFACE.dark, PALETTES.dark.frontier, { gradient: true }),
     checkRamp('continuous gradient (light)', PALETTES.light.gradient, MAP_SURFACE.light, PALETTES.light.frontier, { gradient: true }),
+    // Exploration's second accent, three ways: it has to be visible on its own surface, and it
+    // has to stay apart from BOTH the frontier and every step of the ramp it sits between. A
+    // one-element ramp is not a degenerate case here -- it is exactly the question being asked,
+    // and the monotone and gap rules are vacuously true for it rather than skipped.
+    ...(['dark', 'light'] as const).flatMap((t) => [
+      checkRamp(`one-way accent (${t})`, [PALETTES[t].oneWay], MAP_SURFACE[t], PALETTES[t].frontier, {
+        alpha: effectiveAlpha(t, 'exploration'),
+      }),
+      checkRamp(`continuous gradient vs one-way accent (${t})`, PALETTES[t].gradient, MAP_SURFACE[t], PALETTES[t].oneWay, {
+        gradient: true,
+      }),
+    ]),
   ];
   for (const r of reports) {
     console.log(r.lines.join('\n'));

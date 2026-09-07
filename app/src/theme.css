@@ -19,8 +19,10 @@
   --text-secondary: #c3c2b7;
   --text-muted: #8a8a80;
 
-  /* Exploration: a reserved accent for the frontier, plus a single-hue ramp for depth. */
+  /* Exploration: two reserved accents -- new ground, and ground only ever travelled one way --
+     plus a single-hue ramp for depth. */
   --frontier: #eda100;
+  --one-way: #d94f2b;
   --repeat-1: #256abf;
   --repeat-2: #5598e7;
   --repeat-3: #9ec5f4;
@@ -77,6 +79,7 @@
   --text-muted: #6c707a;
 
   --frontier: #c07a00;
+  --one-way: #a8321a;
   --repeat-1: #5b52e8;
   --repeat-2: #3822a0;
   --repeat-3: #1c0f5e;

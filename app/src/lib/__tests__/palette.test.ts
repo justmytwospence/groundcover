@@ -40,6 +40,9 @@ describe('palette is defined in exactly one place', () => {
       expect(tokenValue(block, 'frontier'), `${theme} --frontier`).toBe(
         PALETTES[theme].frontier.toLowerCase(),
       );
+      expect(tokenValue(block, 'one-way'), `${theme} --one-way`).toBe(
+        PALETTES[theme].oneWay.toLowerCase(),
+      );
       heat.forEach((hex, i) => {
         expect(tokenValue(block, `heat-${i + 1}`), `${theme} --heat-${i + 1}`).toBe(hex.toLowerCase());
       });

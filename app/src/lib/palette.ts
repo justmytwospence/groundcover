@@ -19,8 +19,10 @@ export interface Palette {
   exploration: string[];
   /** Banded ramp for heatmap mode: [1, 2-4, 5-9, 10-24, 25+]. */
   heatmap: string[];
-  /** Reserved accent for ground covered exactly once. */
+  /** Reserved accent for ground covered exactly once, in one direction. */
   frontier: string;
+  /** Reserved accent for ground covered more than once but never the other way. */
+  oneWay: string;
   /** Continuous ramp, sampled per site and rescaled to the busiest visible ground. */
   gradient: string[];
 }
@@ -61,9 +63,25 @@ export const MODE_ALPHA: Record<Theme, { exploration: number; heatmap: number }>
 };
 
 /**
- * Exploration: a reserved accent for ground visited exactly once, then a single-hue ordinal
- * ramp for depth. The last entry repeats the top step because the band function has one more
- * band than the ramp has distinct steps.
+ * Exploration: two reserved accents, then a single-hue ordinal ramp for depth. The last entry
+ * repeats the top step because the band function has one more band than the ramp has distinct
+ * steps.
+ *
+ * `oneWay` is the second accent: ground walked more than once but never the other way. It is a
+ * category, not a rung -- a loop run fifty times is still one-way -- so it sits outside the
+ * ramp for the same reason the frontier does.
+ *
+ * **The depth ramp could not go warm with it, and that was measured rather than argued.** The
+ * ask was a yellow-orange-red exploration mode. On the light surface it is achievable: hue 30
+ * clears every criterion. On the dark surface nothing warm does, at any hue, and the reason is
+ * structural -- a dark surface reads brighter as more, so the ramp has to live at the top of
+ * the lightness range, which is exactly where the gold frontier already is. Every warm ramp
+ * therefore lands a step on top of gold: the closest sits 1.7 apart under protanopia against a
+ * floor of 8, meaning a colour-blind viewer sees new ground and well-worn ground as one colour.
+ * Going warm on dark means giving up the gold frontier, which is a bigger change than the one
+ * being asked for. A single accent has the freedom a ramp does not, because it can be parked
+ * away from gold's lightness rather than sweeping through it: #d94f2b sits 15.9 from gold and
+ * 22.5 from the nearest ramp step. Re-derive all of this with `npm run palette`.
  *
  * The two palettes are not transforms of each other. On a dark surface brighter means more, so
  * the repeat ramp climbs toward white; on a light surface that reads backwards, so it descends
@@ -78,12 +96,14 @@ export const PALETTES: Record<Theme, Palette> = {
     exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'],
     heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
     frontier: '#eda100',
+    oneWay: '#d94f2b',
     gradient: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
   },
   light: {
     exploration: ['#c07a00', '#5b52e8', '#3822a0', '#1c0f5e', '#1c0f5e'],
     heatmap: ['#5b52e8', '#4a34c9', '#3822a0', '#261577', '#170a4d'],
     frontier: '#c07a00',
+    oneWay: '#a8321a',
     gradient: ['#5b52e8', '#5346d9', '#4a34c9', '#4029b4', '#3822a0', '#2b1a80'],
   },
 };

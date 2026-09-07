@@ -7,6 +7,8 @@
  */
 
 import {
+  DIR_ALONG,
+  DIR_AGAINST,
   FORMAT_VERSION,
   PARAMS_HASH,
   SPORT_GROUPS,
@@ -64,7 +66,12 @@ function sampleRamp(stops: [number, number, number][], t: number): [number, numb
  */
 const rampsFor = (theme: 'dark' | 'light') => {
   const p = PALETTES[theme] ?? PALETTES.dark;
-  return { frontier: hex(p.frontier), repeat: p.gradient.map(hex), heat: p.heatmap.map(hex) };
+  return {
+    frontier: hex(p.frontier),
+    oneWay: hex(p.oneWay),
+    repeat: p.gradient.map(hex),
+    heat: p.heatmap.map(hex),
+  };
 };
 
 
@@ -90,6 +97,16 @@ let touchDirs: Uint8Array;
 let siteBearing: Uint8Array;
 
 let visitCount: Uint16Array;
+/**
+ * The same fold, split by travel direction, so the map can tell a there-and-back from a loop.
+ *
+ * Two counters rather than one pair of bits because the fold has to run backwards: an expanding
+ * time window folds activities in with delta +1 and every other path folds them out with -1,
+ * and a bit that has been OR-ed in cannot be un-OR-ed. They are also not derivable from
+ * `visitCount` -- one out-and-back sets both, so along + against can exceed the visit count.
+ */
+let alongCount: Uint16Array;
+let againstCount: Uint16Array;
 /**
  * Visit-count histogram for the visible sites, reused each query.
  *
@@ -209,6 +226,8 @@ async function init(): Promise<void> {
   }
 
   visitCount = new Uint16Array(nSites);
+  alongCount = new Uint16Array(nSites);
+  againstCount = new Uint16Array(nSites);
   colorSlots[0] = new Uint8Array(4 * nSites);
   colorSlots[1] = new Uint8Array(4 * nSites);
 
@@ -270,11 +289,19 @@ function inViewport(i: number, vp: Viewport): boolean {
   return x >= vp.minX && x <= vp.maxX && y >= vp.minY && y <= vp.maxY;
 }
 
-/** Fold one activity's touched sites into visitCount. */
+/** Fold one activity's touched sites into visitCount and the two direction counters. */
 function foldActivity(idx: number, delta: 1 | -1): void {
   const from = actOffsets[idx];
   const to = actOffsets[idx + 1];
-  for (let k = from; k < to; k++) visitCount[touchSiteIds[k]] += delta;
+  for (let k = from; k < to; k++) {
+    const s = touchSiteIds[k];
+    const d = touchDirs[k];
+    visitCount[s] += delta;
+    // Multiplied by the bit rather than branched on it: this runs once per touch per query,
+    // which is the innermost loop in the engine, and the bits are already 0 or 1.
+    alongCount[s] += (d & DIR_ALONG) * delta;
+    againstCount[s] += ((d & DIR_AGAINST) >> 1) * delta;
+  }
 }
 
 function qualifies(a: ActivitySummary, t0: number, t1: number, groupSet: Set<number>): boolean {
@@ -302,6 +329,8 @@ function runFold(req: QueryRequest, groupSet: Set<number>): number {
   }
 
   visitCount.fill(0);
+  alongCount.fill(0);
+  againstCount.fill(0);
   let count = 0;
   for (const a of activities) {
     if (qualifies(a, req.t0, req.t1, groupSet)) {
@@ -347,9 +376,10 @@ function writeColors(
   const heat = mode === 'heatmap';
   const stops = heat ? g.heat : g.repeat;
   const alpha = heat ? MODE_ALPHA[surface].heatmap : MODE_ALPHA[surface].exploration;
-  // Exploration reserves one visit for the frontier, so the ramp covers two upwards; the
-  // heatmap has no reserved accent and spans the whole range.
-  const lo = heat ? 1 : 2;
+  // Both modes now span the whole range. Exploration's ramp used to begin at two because the
+  // frontier owned every single-visit site; it no longer does, since one out-and-back covers
+  // ground in both directions on its first visit and belongs on the ramp at a count of one.
+  const lo = 1;
   const denom = Math.max(1, maxVisit - lo);
   for (let i = 0; i < nSites; i++) {
     const v = visitCount[i];
@@ -365,8 +395,18 @@ function writeColors(
       out[o + 3] = 0;
       continue;
     }
+    // Exploration answers two questions at once: how deeply is this ground worn, and have you
+    // ever come back the other way. Depth is the ramp. Direction is the two reserved accents,
+    // because it is a category rather than a rung -- a loop ridden fifty times is still ground
+    // you have only ever seen from one side, and shading it by count would say the opposite.
+    // `heat ||` first so the heatmap never pays to read the direction counters: it does not
+    // use them, and this is the per-site loop.
     const c =
-      !heat && v <= 1 ? g.frontier : sampleRamp(stops as [number, number, number][], (v - lo) / denom);
+      heat || (alongCount[i] > 0 && againstCount[i] > 0)
+        ? sampleRamp(stops as [number, number, number][], (v - lo) / denom)
+        : v <= 1
+          ? g.frontier
+          : g.oneWay;
     out[o] = c[0];
     out[o + 1] = c[1];
     out[o + 2] = c[2];
