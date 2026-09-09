@@ -397,6 +397,144 @@ const rampFor = (h: number, topL: number, gap: number, steps: number, chromaScal
   });
 
 /**
+ * A ramp at hue `h` carrying the SAME lightness at every step as an existing one.
+ *
+ * Exploration paints two ramps at once -- one for ground travelled one way, one for ground
+ * travelled both -- and the whole encoding rests on lightness meaning visit count and nothing
+ * else. If the two ramps had different lightness profiles, a busy one-way street and a quiet
+ * two-way street could land on the same brightness, and the reader would have no way to know
+ * which of the two variables had moved. Mirroring the lightness makes hue the only difference
+ * between them, which is exactly the claim the legend makes.
+ *
+ *   npm run palette -- mirror 40 --dark
+ */
+function mirrorRamp(source: string[], h: number, chromaScale: number, floor?: number): string[] {
+  const Ls = source.map((c) => oklab(hexToRgb(c))[0]);
+  const lo = Math.min(...Ls);
+  const hi = Math.max(...Ls);
+  // A floor rescales the whole profile rather than clamping the end that breaches it. Clamping
+  // leaves the bottom two steps sitting on nearly the same lightness, which reads as one step.
+  const remap = (L: number) =>
+    floor === undefined || lo >= floor ? L : floor + ((L - lo) / (hi - lo)) * (hi - floor);
+  return Ls.map((L) => {
+    const t = remap(L);
+    return rgbToHex(oklabToRgb(fromLch(t, maxChroma(t, h) * chromaScale, h)));
+  });
+}
+
+/**
+ * Derive the matched pair of ramps exploration paints, and prove they hold.
+ *
+ *   npm run palette -- pair 40 262 --dark
+ *
+ * Two ramps sharing one lightness profile, so that lightness means visit count and hue means
+ * direction, with no third reading available. The profile cannot simply be inherited from the
+ * old single ramp: its dimmest step, #256abf, clears the surface by 3.06:1 and a warm hue at
+ * that same lightness manages only 2.90:1, because WCAG luminance weights green heavily and a
+ * saturated red has almost none. Section 6.2 predicted this -- "#256abf -> #3480da would clear
+ * the bar if it ever matters" -- and a second hue on the same ladder is when it matters.
+ *
+ * So the weak end is raised until BOTH hues clear the floor, and the far end pushed as far as
+ * the gamut allows, which is the widest ladder the pair can share. Ranked by range, because a
+ * pair squeezed into four percent of the lightness axis satisfies every rule and still cannot
+ * show anybody the difference between two visits and twenty.
+ */
+function pair(): void {
+  const theme: Theme = process.argv.includes('--dark') ? 'dark' : 'light';
+  const hues = (argAfter('pair') ?? '').split(/[ ,]+/).map(Number).filter(Number.isFinite);
+  if (hues.length !== 2) {
+    console.log('usage: npm run palette -- pair <hueOneWay> <hueBothWays> [--dark] [--steps 6]');
+    process.exitCode = 1;
+    return;
+  }
+  const steps = Number(argAfter('--steps') ?? 6);
+  const scale = Number(argAfter('--scale') ?? 0.9);
+  const minSep = Number(argAfter('--minsep') ?? 12);
+  const surface = MAP_SURFACE[theme];
+  const dark = theme === 'dark';
+
+  // On a dark surface brighter means more, so the weak (dim) end is the bottom of the ladder;
+  // on a light surface it is the top. Either way it is the end that has to clear the floor.
+  const build = (h: number, weakL: number, farL: number): string[] =>
+    Array.from({ length: steps }, (_, i) => {
+      const t = i / (steps - 1);
+      const L = weakL + (farL - weakL) * t;
+      return rgbToHex(oklabToRgb(fromLch(L, maxChroma(L, h) * scale, h)));
+    });
+
+  let best: { weakL: number; farL: number; ramps: string[][]; range: number } | null = null;
+  for (let weakL = dark ? 0.4 : 0.68; dark ? weakL <= 0.75 : weakL >= 0.3; weakL += dark ? 0.01 : -0.01) {
+    for (let farL = dark ? 0.98 : 0.1; dark ? farL >= weakL + 0.1 : farL <= weakL - 0.1; farL += dark ? -0.01 : 0.01) {
+      const ramps = hues.map((h) => build(h, weakL, farL));
+      if (!ramps.every((r) => checkRamp('t', r, surface, null, { gradient: true }).ok)) continue;
+      let worst = Infinity;
+      for (const a of ramps[0]) for (const b of ramps[1]) worst = Math.min(worst, worstDeltaE(a, b));
+      // Deliberately above MIN_ACCENT_SEPARATION by default. Maximising range alone drives the
+      // far end toward white, where every hue converges and the two ramps meet at the floor --
+      // technically passing, and useless exactly where the busiest ground is drawn.
+      if (worst < minSep) continue;
+      const range = Math.abs(farL - weakL);
+      if (!best || range > best.range) best = { weakL, farL, ramps, range };
+    }
+  }
+
+  if (!best) {
+    console.log(`no shared lightness profile lets hues ${hues.join(' and ')} both pass on ${surface}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`${theme}: weak end L${best.weakL.toFixed(2)} -> far end L${best.farL.toFixed(2)}, chroma x${scale}`);
+  console.log(`  oneWay   (h${hues[0]})  ${best.ramps[0].join(' ')}`);
+  console.log(`  bothWays (h${hues[1]})  ${best.ramps[1].join(' ')}`);
+  let worst = Infinity;
+  let pairText = '';
+  for (const a of best.ramps[0])
+    for (const b of best.ramps[1]) {
+      const d = worstDeltaE(a, b);
+      if (d < worst) {
+        worst = d;
+        pairText = `${a} vs ${b}`;
+      }
+    }
+  console.log(`  closest step of either ramp: ${worst.toFixed(1)} (${pairText})`);
+}
+
+function mirror(): void {
+  const theme: Theme = process.argv.includes('--dark') ? 'dark' : 'light';
+  const hue = Number(argAfter('mirror') ?? NaN);
+  if (!Number.isFinite(hue)) {
+    console.log("usage: npm run palette -- mirror <hue 0-360> [--dark] [--scale 0.9]");
+    process.exitCode = 1;
+    return;
+  }
+  const scale = Number(argAfter('--scale') ?? 0.9);
+  const floorArg = argAfter('--floor');
+  const source = PALETTES[theme].bothWays;
+  const ramp = mirrorRamp(source, hue, scale, floorArg === null ? undefined : Number(floorArg));
+  console.log(`mirroring the ${theme} both-ways ramp at hue ${hue}, chroma x${scale}`);
+  console.log(`  source  ${source.join(' ')}`);
+  console.log(`  mirror  ${ramp.join(' ')}`);
+  const r = checkRamp(`mirror h${hue} (${theme})`, ramp, MAP_SURFACE[theme], null, { gradient: true });
+  console.log(r.lines.join('\n'));
+  // The pairing is the point, so report it rather than leaving it to a second command.
+  let worst = Infinity;
+  let pair = '';
+  for (const a of ramp)
+    for (const b of source) {
+      const d = worstDeltaE(a, b);
+      if (d < worst) {
+        worst = d;
+        pair = `${a} vs ${b}`;
+      }
+    }
+  console.log(
+    `  ${worst >= MIN_ACCENT_SEPARATION ? 'ok  ' : 'FAIL'} closest step of either ramp: ${worst.toFixed(1)} (${pair})`,
+  );
+  if (!r.ok || worst < MIN_ACCENT_SEPARATION) process.exitCode = 1;
+}
+
+/**
  * Rank hues for the light-mode repeat ramp. Every candidate must pass the same checks the
  * shipped palette does; among those that pass, the ranking is by how far the ramp sits from
  * water, because that is the complaint this search exists to answer.
@@ -601,4 +739,6 @@ function explain(): void {
 
 if (process.argv.includes('search')) search();
 else if (process.argv.includes('explain')) explain();
+else if (process.argv.includes('mirror')) mirror();
+else if (process.argv.includes('pair')) pair();
 else checkAll();
