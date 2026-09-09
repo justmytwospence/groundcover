@@ -64,10 +64,11 @@ None of them tell you how much of it was *new*. If you run the same 5-mile loop 
 a heatmap shows a bright loop and your annual total says 1,000 miles. The honest answer to
 "how much ground have you covered" is 5 miles.
 
-GroundCover computes both numbers and shows them side by side, and colors the map so the
-distinction is visible: the ground you have covered exactly once (your frontier) is
-rendered in a reserved accent color; ground you have worn in is rendered in a
-brightness ramp by how many times you have been there.
+GroundCover computes both numbers and shows them side by side, and colors the map so two
+things are visible at once: **which way you went** — warm for ground you have only ever
+travelled in one direction, cool for ground you have come back the other way — and **how
+often**, as a brightness ramp within each. A loop you ride weekly and an out-and-back you
+ran once are different facts, and the map should not need a legend lookup to tell them apart.
 
 ### 1.2 The two mileage numbers
 
@@ -103,7 +104,7 @@ These were decided during spec review. Do not relitigate them during implementat
 | Runtime | The public build computes everything in the visitor's browser. The local pipeline still precomputes in Node, which remains the fastest personal workflow. |
 | Heavy compute | Runs wherever the data is: a Node script locally, a Web Worker in the public build. `packages/ledger` is the same pure code in both. |
 | Layout | Full-bleed map with floating translucent control panels. |
-| Default map mode | Exploration (first-visit vs repeat coloring). Classic frequency heatmap is one toggle away. |
+| Default map mode | Exploration (direction by hue, visit count by brightness). Classic frequency heatmap is one toggle away. |
 | v1 feature set | Heatmap + both mileage numbers + time/sport/viewport filters + time-lapse playback + exploration/heatmap modes + stats dashboard. |
 
 ### 1.4 Non-goals for v1
@@ -625,12 +626,8 @@ in `app/src/theme.css` as custom properties and reference them by role.
   --text-secondary:   #c3c2b7;
   --text-muted:       #8a8a80;
 
-  /* Exploration mode: two reserved accents + a single-hue ordinal ramp for depth */
-  --frontier:         #eda100;  /* 1 visit, one direction  */
-  --one-way:          #d94f2b;  /* 2+ visits, never the other way */
-  --repeat-1:         #256abf;  /* 2-4 visits   */
-  --repeat-2:         #5598e7;  /* 5-9 visits   */
-  --repeat-3:         #9ec5f4;  /* 10+ visits   */
+  /* Interface accent. Exploration's two ramps are NOT here -- see below. */
+  --frontier:         #eda100;  /* new-ground figure, playhead, search highlight */
   --ambiguous:        #4a4a52;  /* deliberately recessive; used only by the active-track layer */
 
   /* Heatmap mode: the same hue as a five-step ordinal ramp, no frontier accent */
@@ -666,11 +663,7 @@ descends toward navy instead and every step was re-chosen rather than flipped.
 ```css
 :root[data-theme='light'] {
   --map-surface:      #f4f4f1;
-  --frontier:         #c07a00;  /* 1 visit, one direction  */
-  --one-way:          #a8321a;  /* 2+ visits, never the other way */
-  --repeat-1:         #5b52e8;  /* 2-4 visits   */
-  --repeat-2:         #3822a0;  /* 5-9 visits   */
-  --repeat-3:         #1c0f5e;  /* 10+ visits   */
+  --frontier:         #c07a00;  /* new-ground figure, playhead, search highlight */
 
   --heat-1:           #5b52e8;  /* 1 visit      */
   --heat-2:           #4a34c9;  /* 2-4 visits   */
@@ -708,28 +701,37 @@ accent had to change too: `#eda100` sits at 1.9:1 on a light map, a hairline nob
 categorical chart trio is the one group that needs no second set -- it passes all-pairs CVD and
 the normal-vision floor on both surfaces.
 
-**The second accent is `--one-way`, and the depth ramp deliberately did not follow it.** Ground
-walked more than once but never in the other direction is a *category*, not a rung: a loop
-ridden fifty times is still ground you have only ever seen from one side, so shading it by count
-would say the opposite of the truth. It therefore sits outside the ramp, exactly as the frontier
-does. `#d94f2b` clears the gold frontier by CVD delta-E 15.9 and the nearest ramp step by 22.5,
-at 4.01:1 on the dark surface and 3.47:1 as a hairline; `#a8321a` scores 14.7 / 22.4 and
-6.08:1 / 5.10:1 on light.
+**Exploration paints two ramps, and neither of them is here.** They live in
+`app/src/lib/palette.ts`, because that is the module the worker and the legend both read. The
+`--repeat-*` tokens that used to mirror them into this stylesheet were referenced by no CSS rule
+at all: the copy existed only to be kept in sync, which is the same shape as the bug that
+motivated putting the palette in one place to begin with. A test now asserts they stay gone.
 
-The obvious follow-on -- make the whole of exploration warm, a yellow-orange-red ramp -- was
-tried and **rejected on measurement, not taste.** On the light surface it is achievable: hue 30
-clears every criterion. On the dark surface nothing warm does, at any hue, and the reason is
-structural rather than a matter of finding the right orange. A dark surface reads brighter as
-more, so the ramp has to occupy the top of the lightness range, which is precisely where the
-gold frontier already lives; every warm ramp therefore lands one of its steps on top of gold.
-The closest candidate sits **1.7** from the frontier under protanopia against a floor of 8 --
-a colour-blind viewer would see new ground and well-worn ground as the same colour. Nor can the
-frontier simply move below the ramp on dark: the surface has no contrast left down there, and a
-red dim enough to rank under the ramp fails the 3:1 floor at 1.98:1. Going warm on dark means
-giving up the gold frontier and re-selecting it, which is a larger change than the one that
-prompted this. A single accent has freedom a ramp does not, because it can be parked away from
-gold's lightness instead of sweeping through it -- which is why `--one-way` is warm and the ramp
-is not. Reproduce with `npm run palette -- search --dark --accent '#eda100'`.
+**Hue is direction, lightness is count, and the two ramps share a lightness profile so those
+stay separable.** `oneWay` is derived by taking `bothWays`'s lightness at every step and
+rebuilding it at a warm hue; `npm run palette -- mirror 40 --dark --floor 0.56` reproduces the
+dark one exactly and `-- mirror 40` the light one. Without a shared profile a busy one-way
+street and a quiet two-way street could land on the same brightness, and the reader would have
+no way to know which of the two variables had moved. The checker enforces both halves of that
+claim: no step of either ramp comes within CVD delta-E 12 of any step of the other (13.7 dark,
+17.3 light), and matching steps stay within 0.045 of each other in lightness.
+
+The floor is the one place the mirror is not exact. `bothWays`'s dimmest step, `#256abf`, clears
+the dark surface by 3.06:1 -- already this palette's thinnest margin, and the step named below
+as its known weak point. A warm hue at that same lightness manages only 2.90:1, because WCAG
+luminance weights green heavily and a saturated red has almost none, so mirroring exactly would
+ship a step under the 3:1 floor. The warm ramp's weak end is raised to L 0.56, clearing at
+3.31:1 at the cost of one step of range.
+
+**Warm was impossible here until the frontier left the map, and that is worth recording because
+the opposite was measured and written down.** While gold was painted on the map, no warm ramp
+could pass on the dark surface at any hue: a dark surface reads brighter as more, so the ramp
+has to occupy the top of the lightness range, which is exactly where gold sat, and every warm
+candidate landed a step on top of it -- the closest 1.7 apart under protanopia against a floor
+of 8. The fix was not a better orange. It was dropping the reserved accent, which the map no
+longer needed once "covered once" stopped being a category it distinguished. `--frontier`
+remains a token; it is simply an interface colour now, and the checker verifies it stays legible
+on its surface without constraining anything the map draws.
 
 **The water hue-family rule was inverted from the day it was written, and is fixed.** It
 computed `180 - angle`, scoring two *identical* hues as 180 degrees apart and opposite ones as
@@ -774,28 +776,27 @@ If any of these values change, re-run the validator rather than eyeballing the r
 
 Rules that follow from this and must be honored:
 
-- The frontier color is **reserved**. Never reuse gold for a chart series, a button, or a
-  hover state. `--one-way` is reserved on the same terms, and for the same reason: two accents
-  that mean two specific things on the map cannot also mean "emphasis" anywhere else.
-- The repeat ramp is one hue. Do not insert a teal, green, or red step "for contrast" —
-  that breaks the sequential encoding.
-- On a dark surface, brighter means more. Higher visit counts get brighter steps, so
-  well-worn ground reads as glowing and the frontier reads as a distinct color rather than
-  a distinct brightness.
-- Legend is always present. Color never carries meaning alone: the legend shows the ramp and
-  its ends, and hover reports exact counts.
-- **The repeat ramp is continuous and rescaled per query**, not banded. Fixed bands ("5-9") say
+- `--frontier` is **reserved**. Never reuse gold for a chart series, a button, or a hover
+  state. It is an interface accent now rather than a map colour, but it still means exactly one
+  thing -- new ground -- and a colour that means one thing cannot also mean "emphasis".
+- Each exploration ramp is one hue. Do not insert a teal, green, or red step "for contrast" —
+  that breaks the sequential encoding. Two ramps of *different* hues is the encoding; a hue
+  change *within* one is a bug.
+- **The two ramps share a lightness profile.** Lightness means visit count and nothing else. If
+  you re-derive one ramp, re-derive the other from it, or the map starts saying two things with
+  one channel.
+- On a dark surface, brighter means more; on a light surface, darker means more. Both ramps obey
+  this, so well-worn ground reads as emphatic on either surface.
+- Legend is always present. Color never carries meaning alone: the legend shows both ramps under
+  one shared scale, and hover reports the exact count and the direction split.
+- **The ramps are continuous and rescaled per query**, not banded. Fixed bands ("5-9") say
   nothing about anybody's history, and a fixed scale wastes most of the ramp on a window whose
-  repeats never exceed three. It is scaled to the 98th percentile of visible counts rather than
-  the maximum: one much-loved doorstep reaching a hundred visits would otherwise squeeze the
-  whole history into the first slice. The top of the scale therefore reads "at least this many".
-- **The frontier stays a reserved colour rather than the ramp's first stop.** A gold-to-blue ramp
-  cannot be monotone in lightness on a dark surface -- gold sits at L 0.76, near the top of the
-  blue range, so hue and magnitude fight -- and a ramp that cannot be read by brightness is not
-  a ramp. Validated: the continuous ends are monotone, single-hue (3 degrees dark, 5 light), and
-  clear 3:1 against their surface (3.06:1 dark, 3.40:1 light). The adjacent-lightness-gap rule
-  is deliberately not applied, since it exists to keep discrete bands apart and a gradient has
-  none.
+  repeats never exceed three. Scaled to the 98th percentile of visible counts rather than the
+  maximum: one much-loved doorstep reaching a hundred visits would otherwise squeeze the whole
+  history into the first slice. The top of the scale therefore reads "at least this many". Both
+  ramps use the SAME scale, which is what makes equal brightness mean equal count across them.
+- The adjacent-lightness-gap rule is deliberately not applied to these two, since it exists to
+  keep discrete bands apart and a gradient has none.
 - Text wears text tokens, never a data color.
 
 ### 6.3 Map layers
@@ -876,32 +877,32 @@ group — excluded trainer, manual, virtual, and GPS-less activities are absent 
 artifacts entirely and are counted nowhere.
 
 **Mode toggle.** Exploration (default) or Heatmap. Heatmap is driven by the filtered visit
-count alone; exploration is driven by the visit count **and** by whether the ground has ever
-been travelled in both directions:
+count alone. Exploration is driven by two independent variables, on two independent channels:
 
-| Visits | Directions | Exploration | alpha | Heatmap | alpha |
-|---|---|---|---|---|---|
-| 0 | — | hidden | 0 | hidden | 0 |
-| 1 | one | `--frontier` | 255 | `--heat-1` | 90 dark / 190 light |
-| 2+ | one | `--one-way` | 255 | ramp by count | 90 dark / 190 light |
-| 1 | both | `--repeat-1` | 255 | `--heat-1` | 90 dark / 190 light |
-| 2-4 | both | `--repeat-1` | 255 | `--heat-2` | 90 dark / 190 light |
-| 5-9 | both | `--repeat-2` | 255 | `--heat-3` | 90 dark / 190 light |
-| 10-24 | both | `--repeat-3` | 255 | `--heat-4` | 90 dark / 190 light |
-| 25+ | both | `--repeat-3` | 255 | `--heat-5` | 90 dark / 190 light |
+| | Exploration | Heatmap |
+|---|---|---|
+| hue | direction: `oneWay` or `bothWays` | one ramp, direction ignored |
+| position on ramp | visit count, 1 → the 98th percentile | visit count, same scale |
+| alpha | 255 | 90 dark / 190 light |
+| no visits | hidden | hidden |
+
+There is **no reserved step for ground covered once**. A single visit is simply the bottom of
+whichever ramp the ground belongs to. The frontier had been that reserved step, and removing it
+is what simplified the map from three overlapping ideas to two orthogonal ones — the question
+"what have I never covered before?" is answered by the new-ground figure in the stats card,
+which is where it was always answered properly anyway.
 
 **A single out-and-back is already both-ways ground.** One activity that doubles back sets both
-direction bits on that touch, so it reaches the ramp at a visit count of one — which is why
-exploration's ramp now begins at 1 rather than at 2, and why the frontier no longer owns every
-single-visit site. This matches what the site popup has always reported for such a touch; the
-alternative, holding the frontier for all first visits and only distinguishing direction from
-the second, would have the map and the popup contradict each other on the same segment.
+direction bits on that touch, so it is cool-hued at a visit count of one. This matches what the
+site popup has always reported for such a touch.
 
-The direction split is per site and per filter, folded from `touches.bin`'s `dirs` block
-alongside the visit count. It costs two more counters rather than a pair of bits because the
-fold has to run backwards — an expanding time window folds activities out with delta -1, and a
-bit that has been OR-ed in cannot be un-OR-ed — and because along + against can legitimately
-exceed the visit count, so neither is derivable from the other.
+The direction split is per site and **per filter** — it reflects the selected sports and time
+window, so a road you only ever ride one way reads as one-way even if you have walked it both
+ways outside the current selection. It is folded from `touches.bin`'s `dirs` block alongside the
+visit count, and costs two counters rather than a pair of bits because the fold has to run
+backwards: an expanding time window folds activities out with delta -1, and a bit that has been
+OR-ed in cannot be un-OR-ed. Along + against can also legitimately exceed the visit count, so
+neither is derivable from the other.
 
 Alpha is part of the encoding, not a detail. Exploration mode uses normal alpha blending at
 full opacity so the band colors read true. Heatmap mode uses additive blending, where alpha
@@ -910,13 +911,12 @@ two or three overlaps and the five-step ramp is destroyed. 90 is the dark value.
 composites normally rather than additively, so nothing saturates toward white and 90 would
 simply be faint: it uses 190. Both live in `MODE_ALPHA` (`app/src/lib/palette.ts`).
 
-The two modes share the 2-4 / 5-9 breakpoints so the legend stays learnable, but they diverge
-above 10: exploration has four bands (its top band is 10+) while heatmap has five (10-24 and
-25+). `Legend.tsx` must render a different row set per mode — it cannot be a static list.
-Exploration shows both reserved accents as their own rows ("new ground / once" and "one way
-only / never back") above a ramp labelled "both ways"; heatmap shows the ramp alone, labelled
-with the visit ranges themselves. Colour never carries meaning alone, and with three things to
-tell apart rather than two, the ramp has to be named as well as the accents.
+`Legend.tsx` renders a different set of ramps per mode — it cannot be a static list.
+Exploration shows two, labelled "one way only" and "both ways", under **one shared scale**;
+heatmap shows one, unlabelled, under the same scale. The single scale is itself the claim: the
+same position on either ramp means the same number of visits, so repeating the numbers under
+each would imply the two could be scaled differently, which is exactly the reading the shared
+lightness profile exists to rule out.
 
 **Timeline scrubber.** Along the bottom:
 

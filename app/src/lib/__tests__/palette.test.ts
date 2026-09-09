@@ -40,18 +40,24 @@ describe('palette is defined in exactly one place', () => {
       expect(tokenValue(block, 'frontier'), `${theme} --frontier`).toBe(
         PALETTES[theme].frontier.toLowerCase(),
       );
-      expect(tokenValue(block, 'one-way'), `${theme} --one-way`).toBe(
-        PALETTES[theme].oneWay.toLowerCase(),
-      );
       heat.forEach((hex, i) => {
         expect(tokenValue(block, `heat-${i + 1}`), `${theme} --heat-${i + 1}`).toBe(hex.toLowerCase());
       });
-      // exploration[0] is the frontier; 1..3 are the banded repeat steps.
-      PALETTES[theme].exploration.slice(1, 4).forEach((hex, i) => {
-        expect(tokenValue(block, `repeat-${i + 1}`), `${theme} --repeat-${i + 1}`).toBe(
-          hex.toLowerCase(),
-        );
-      });
+    }
+  });
+
+  /**
+   * The duplication that was removed, kept removed.
+   *
+   * Exploration's ramps were mirrored into theme.css as `--repeat-*` and `--one-way`, and no CSS
+   * rule ever referenced one. The copy existed only to be kept in sync, which is the same shape
+   * as the bug this file was written for. Re-adding a token is fine; re-adding a token holding a
+   * ramp colour that nothing paints is how the drift starts again.
+   */
+  it('does not reintroduce CSS copies of the exploration ramps', () => {
+    const css = read('../../theme.css');
+    for (const dead of ['--repeat-1', '--repeat-2', '--repeat-3', '--one-way']) {
+      expect(css, `${dead} is defined but nothing paints it`).not.toContain(`${dead}:`);
     }
   });
 });

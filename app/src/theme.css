@@ -1,10 +1,12 @@
 /*
  * Design tokens. See SPEC.md section 6.2.
  *
- * The map ramps are not arbitrary: both were validated as ordinal ramps against the #12141a
- * map surface (monotone lightness, adjacent lightness gaps >= 0.06, single hue, dimmest step
- * clearing 3:1 contrast at 3.06:1 against the #1b1f27 surface), and the gold frontier accent separates from every ramp
- * step by CVD delta-E 24-35. If you change a value, re-validate rather than eyeballing.
+ * The map's own ramps are NOT here -- they are in app/src/lib/palette.ts, because that is the
+ * module the worker and the legend both read. What lives here is the chrome: surfaces, text,
+ * panel borders, and the two data colours a stylesheet genuinely paints (--frontier for the
+ * new-ground figure and the playhead, --series-* for charts).
+ *
+ * If you change a data colour, re-validate with `npm run palette` rather than eyeballing.
  */
 
 :root {
@@ -19,13 +21,10 @@
   --text-secondary: #c3c2b7;
   --text-muted: #8a8a80;
 
-  /* Exploration: two reserved accents -- new ground, and ground only ever travelled one way --
-     plus a single-hue ramp for depth. */
+  /* Exploration's two ramps live in app/src/lib/palette.ts, which is what paints them. They
+     were duplicated here as --repeat-* without a single CSS rule ever referencing one, so the
+     copy existed only to be kept in sync. --frontier stays because stylesheets do use it. */
   --frontier: #eda100;
-  --one-way: #d94f2b;
-  --repeat-1: #256abf;
-  --repeat-2: #5598e7;
-  --repeat-3: #9ec5f4;
   --ambiguous: #4a4a52;
 
   /* Heatmap: the same hue as a five-step ordinal ramp, no frontier accent. */
@@ -59,15 +58,13 @@
 /*
  * Light is a selected palette, not an inversion.
  *
- * On a dark surface brighter means more, so the repeat ramp climbs toward white. On a light
- * surface that reads backwards, so it descends toward navy instead, and every step was
- * re-chosen rather than flipped: monotone lightness, adjacent gaps >= 0.06, single hue, and the
- * lightest step clearing 3:1 against #f4f4f1 at 3.40:1 -- deliberately mirroring the dark
- * ramp's 3.41:1.
+ * On a dark surface brighter means more, so the map's ramps climb toward white. On a light
+ * surface that reads backwards, so they descend toward near-black instead, and every step was
+ * re-chosen rather than flipped.
  *
  * The frontier gold had to change too. #eda100 sits at 1.9:1 on a light map, a hairline nobody
- * would see, so it darkens to #c07a00, which clears 3:1 and still separates from every step of
- * the new ramp by CVD delta-E 24.0 -- inside the 23.8-32.7 band the dark palette achieves.
+ * would see, so it darkens to #c07a00, which clears 3:1. It is a UI accent rather than a map
+ * colour now -- the new-ground figure, the playhead, the search highlight.
  */
 :root[data-theme='light'] {
   --map-surface: #f4f4f1;
@@ -79,10 +76,6 @@
   --text-muted: #6c707a;
 
   --frontier: #c07a00;
-  --one-way: #a8321a;
-  --repeat-1: #5b52e8;
-  --repeat-2: #3822a0;
-  --repeat-3: #1c0f5e;
   --ambiguous: #b0b0b7;
 
   --heat-1: #5b52e8;

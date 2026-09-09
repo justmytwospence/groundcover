@@ -5,9 +5,11 @@
  * query.worker.ts, and the custom properties in theme.css. The worker's copy is the one that
  * paints the map, so editing the other two changed the legend and nothing else -- which is
  * exactly how a validated palette change shipped without changing a single pixel of coverage.
- * This module is now the source both TypeScript consumers import and the checker reads; the CSS
- * tokens still have to be edited alongside it, which `npm run palette` cannot enforce but
- * SPEC.md section 6.2 spells out.
+ *
+ * There is one copy now. The worker's is gone, and so are the CSS ramp tokens: `--repeat-*`
+ * duplicated these values into a stylesheet that never painted them, kept honest only by a test
+ * whose whole job was to police a duplication nothing needed. The legend reads the ramps from
+ * here directly. theme.css keeps only the tokens CSS actually uses -- `--frontier` and friends.
  *
  * Deliberately free of DOM access so the worker can import it.
  */
@@ -15,16 +17,24 @@
 export type Theme = 'dark' | 'light';
 
 export interface Palette {
-  /** Banded ramp for exploration mode: [frontier, 2-4, 5-9, 10+, 10+]. */
-  exploration: string[];
-  /** Banded ramp for heatmap mode: [1, 2-4, 5-9, 10-24, 25+]. */
+  /** Banded ramp for heatmap mode: [1, 2-4, 5-9, 10-24, 25+]. Direction plays no part. */
   heatmap: string[];
-  /** Reserved accent for ground covered exactly once, in one direction. */
+  /**
+   * Accent for new ground.
+   *
+   * A user-interface colour, not a map colour. It is what the new-ground figure, the playhead
+   * and the search highlight are painted with; exploration mode stopped drawing it when the map
+   * went to two ramps, because "covered once" is no longer a category the map distinguishes --
+   * one visit is simply the bottom of whichever ramp the ground belongs to.
+   */
   frontier: string;
-  /** Reserved accent for ground covered more than once but never the other way. */
-  oneWay: string;
-  /** Continuous ramp, sampled per site and rescaled to the busiest visible ground. */
-  gradient: string[];
+  /**
+   * Exploration mode, ground travelled in one direction only. Sampled per site by visit count
+   * and rescaled to the busiest visible ground; index 0 is a single visit.
+   */
+  oneWay: string[];
+  /** Exploration mode, ground travelled both ways. Same scale, same length, different hue. */
+  bothWays: string[];
 }
 
 /** The surface each palette was selected against. */
@@ -63,47 +73,52 @@ export const MODE_ALPHA: Record<Theme, { exploration: number; heatmap: number }>
 };
 
 /**
- * Exploration: two reserved accents, then a single-hue ordinal ramp for depth. The last entry
- * repeats the top step because the band function has one more band than the ramp has distinct
- * steps.
+ * Exploration paints two ramps at once: hue says which direction, lightness says how often.
  *
- * `oneWay` is the second accent: ground walked more than once but never the other way. It is a
- * category, not a rung -- a loop run fifty times is still one-way -- so it sits outside the
- * ramp for the same reason the frontier does.
+ * There is no reserved accent here any more. "Covered once" stopped being a category the map
+ * distinguishes -- a single visit is simply the bottom of whichever ramp the ground belongs to,
+ * and the new-ground figure in the stats card is where that question is actually answered. The
+ * result is one rule the whole map obeys: warm means you have only ever gone one way, cool
+ * means you have come back the other, and brighter (dark) or darker (light) means more often.
  *
- * **The depth ramp could not go warm with it, and that was measured rather than argued.** The
- * ask was a yellow-orange-red exploration mode. On the light surface it is achievable: hue 30
- * clears every criterion. On the dark surface nothing warm does, at any hue, and the reason is
- * structural -- a dark surface reads brighter as more, so the ramp has to live at the top of
- * the lightness range, which is exactly where the gold frontier already is. Every warm ramp
- * therefore lands a step on top of gold: the closest sits 1.7 apart under protanopia against a
- * floor of 8, meaning a colour-blind viewer sees new ground and well-worn ground as one colour.
- * Going warm on dark means giving up the gold frontier, which is a bigger change than the one
- * being asked for. A single accent has the freedom a ramp does not, because it can be parked
- * away from gold's lightness rather than sweeping through it: #d94f2b sits 15.9 from gold and
- * 22.5 from the nearest ramp step. Re-derive all of this with `npm run palette`.
+ * **The two ramps share a lightness profile on purpose.** The encoding rests on lightness
+ * meaning visit count and nothing else, so `oneWay` is derived by taking `bothWays`'s lightness
+ * at every step and rebuilding it at a warm hue -- `npm run palette -- mirror 40 --dark
+ * --floor 0.56` reproduces it exactly. Without that, a busy one-way street and a quiet two-way
+ * street could land on the same brightness and the reader would have no way to tell which of
+ * the two variables had moved.
+ *
+ * The floor is the one place the mirror is not exact, and it is not a fudge. `bothWays`'s
+ * dimmest step, #256abf, clears the dark surface by 3.06:1 -- already the palette's thinnest
+ * margin, and the step section 6.2 singles out as its known weak point. A warm hue at that same
+ * lightness manages only 2.90:1, because WCAG luminance weights green heavily and a saturated
+ * red has almost none, so mirroring it exactly would ship a step under the 3:1 floor. Raising
+ * the warm ramp's weak end to L 0.56 clears it at 3.31:1 and costs one step of range.
+ *
+ * Warm was impossible here until the frontier left the map. Gold sat at the top of the dark
+ * lightness range, which is where a dark-surface ramp has to live, so every warm ramp landed a
+ * step on top of it -- 1.7 apart under protanopia against a floor of 8. Dropping the accent is
+ * what freed the hue.
  *
  * The two palettes are not transforms of each other. On a dark surface brighter means more, so
- * the repeat ramp climbs toward white; on a light surface that reads backwards, so it descends
+ * both ramps climb toward white; on a light surface that reads backwards, so both descend
  * toward near-black instead.
  *
- * Light is indigo rather than blue because the light basemap draws rivers in blue-grey and a
- * hairline of #4a86cf was, measurably, the same feature. See SPEC.md section 6.2 and run
- * `npm run palette` after changing anything here.
+ * `bothWays` is indigo on light rather than blue because the light basemap draws rivers in
+ * blue-grey and a hairline of #4a86cf was, measurably, the same feature. See SPEC.md section
+ * 6.2 and run `npm run palette` after changing anything here.
  */
 export const PALETTES: Record<Theme, Palette> = {
   dark: {
-    exploration: ['#eda100', '#256abf', '#5598e7', '#9ec5f4', '#9ec5f4'],
     heatmap: ['#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'],
     frontier: '#eda100',
-    oneWay: '#d94f2b',
-    gradient: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
+    oneWay: ['#be4b1d', '#d15421', '#e15a24', '#f76730', '#f88d68', '#faac90'],
+    bothWays: ['#256abf', '#3579cd', '#4a86cf', '#5598e7', '#79b0ef', '#9ec5f4'],
   },
   light: {
-    exploration: ['#c07a00', '#5b52e8', '#3822a0', '#1c0f5e', '#1c0f5e'],
     heatmap: ['#5b52e8', '#4a34c9', '#3822a0', '#261577', '#170a4d'],
     frontier: '#c07a00',
-    oneWay: '#a8321a',
-    gradient: ['#5b52e8', '#5346d9', '#4a34c9', '#4029b4', '#3822a0', '#2b1a80'],
+    oneWay: ['#b5471b', '#a44017', '#8f3713', '#7d2f0f', '#6e280c', '#581e07'],
+    bothWays: ['#5b52e8', '#5346d9', '#4a34c9', '#4029b4', '#3822a0', '#2b1a80'],
   },
 };

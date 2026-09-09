@@ -54,8 +54,9 @@ function sampleRamp(stops: [number, number, number][], t: number): [number, numb
   const f = x - i;
   const a = stops[i];
   const b = stops[i + 1];
-  // Linear in sRGB is safe only because every stop shares a hue; across hues it would pass
-  // through mud, which is the other reason the frontier is not part of this ramp.
+  // Linear in sRGB is safe only because every stop within a ramp shares a hue. Interpolating
+  // ACROSS the two exploration ramps would pass through mud, which is why direction picks a
+  // ramp and only then does count sample within it -- the two are never blended.
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
@@ -67,9 +68,8 @@ function sampleRamp(stops: [number, number, number][], t: number): [number, numb
 const rampsFor = (theme: 'dark' | 'light') => {
   const p = PALETTES[theme] ?? PALETTES.dark;
   return {
-    frontier: hex(p.frontier),
-    oneWay: hex(p.oneWay),
-    repeat: p.gradient.map(hex),
+    oneWay: p.oneWay.map(hex),
+    bothWays: p.bothWays.map(hex),
     heat: p.heatmap.map(hex),
   };
 };
@@ -374,11 +374,9 @@ function writeColors(
   const surface: 'dark' | 'light' = theme === 'light' ? 'light' : 'dark';
   const g = rampsFor(surface);
   const heat = mode === 'heatmap';
-  const stops = heat ? g.heat : g.repeat;
   const alpha = heat ? MODE_ALPHA[surface].heatmap : MODE_ALPHA[surface].exploration;
-  // Both modes now span the whole range. Exploration's ramp used to begin at two because the
-  // frontier owned every single-visit site; it no longer does, since one out-and-back covers
-  // ground in both directions on its first visit and belongs on the ramp at a count of one.
+  // Every ramp spans the whole range, and every site with a visit lands on one. There is no
+  // reserved step held back for ground covered once: one visit is simply the bottom.
   const lo = 1;
   const denom = Math.max(1, maxVisit - lo);
   for (let i = 0; i < nSites; i++) {
@@ -395,18 +393,19 @@ function writeColors(
       out[o + 3] = 0;
       continue;
     }
-    // Exploration answers two questions at once: how deeply is this ground worn, and have you
-    // ever come back the other way. Depth is the ramp. Direction is the two reserved accents,
-    // because it is a category rather than a rung -- a loop ridden fifty times is still ground
-    // you have only ever seen from one side, and shading it by count would say the opposite.
-    // `heat ||` first so the heatmap never pays to read the direction counters: it does not
-    // use them, and this is the per-site loop.
-    const c =
-      heat || (alongCount[i] > 0 && againstCount[i] > 0)
-        ? sampleRamp(stops as [number, number, number][], (v - lo) / denom)
-        : v <= 1
-          ? g.frontier
-          : g.oneWay;
+    // Two independent questions, two independent channels. Direction chooses the ramp; how
+    // often chooses the position along it. Both ramps carry the same lightness at the same
+    // step, so brightness answers "how often" and hue answers "which way" without either
+    // reading as the other.
+    //
+    // `heat &&` first so the heatmap never pays to read the direction counters -- it draws one
+    // ramp for everything, and this is the per-site loop.
+    const stops = heat
+      ? g.heat
+      : alongCount[i] > 0 && againstCount[i] > 0
+        ? g.bothWays
+        : g.oneWay;
+    const c = sampleRamp(stops as [number, number, number][], (v - lo) / denom);
     out[o] = c[0];
     out[o + 1] = c[1];
     out[o + 2] = c[2];

@@ -223,9 +223,7 @@ const MIN_ROAD_SEPARATION = 10;
  * for it. Delete the entry and the checker will start failing again, which is the point.
  */
 const ALLOWANCES: Record<string, string> = {
-  'exploration repeat ramp (dark)|hairline': 'recessive step, 1.90:1, unreported -- see the note above',
-  'heatmap ramp (dark)|hairline': 'recessive step, 1.90:1, unreported -- see the note above',
-  'continuous gradient (dark)|hairline': 'recessive step, 1.90:1, unreported -- see the note above',
+  'heatmap ramp (dark)|hairline': 'recessive step, 1.37:1, unreported -- see the note above',
 };
 
 export interface Report {
@@ -487,30 +485,93 @@ function search(): void {
   }
 }
 
+/**
+ * The two exploration ramps, checked against each other.
+ *
+ * Deliberately stricter than MIN_ACCENT_SEPARATION. That floor is for an accent glimpsed
+ * against a ramp; these two ramps are read against each other continuously, all over the map,
+ * and they are the entire direction encoding. It also verifies the shared lightness profile,
+ * because that is the claim the legend makes by putting one scale under both: the same position
+ * on either ramp must mean the same number of visits, or brightness stops being readable as
+ * count alone.
+ */
+const MIN_RAMP_PAIR_SEPARATION = 12;
+/** Lightness may differ by this much at a given step -- one step's worth of the weak-end lift. */
+const MAX_PROFILE_DRIFT = 0.045;
+
+function checkPair(theme: Theme): Report {
+  const a = PALETTES[theme].oneWay;
+  const b = PALETTES[theme].bothWays;
+  const lines: string[] = [];
+  let ok = true;
+  const fail = (s: string) => {
+    ok = false;
+    lines.push(`  FAIL ${s}`);
+  };
+
+  if (a.length !== b.length) fail(`ramps differ in length: ${a.length} vs ${b.length}`);
+  else {
+    let worstDrift = 0;
+    let at = -1;
+    for (let i = 0; i < a.length; i++) {
+      const d = Math.abs(oklab(hexToRgb(a[i]))[0] - oklab(hexToRgb(b[i]))[0]);
+      if (d > worstDrift) {
+        worstDrift = d;
+        at = i;
+      }
+    }
+    if (worstDrift <= MAX_PROFILE_DRIFT)
+      lines.push(`  ok   same lightness at every step (worst ${worstDrift.toFixed(3)} at step ${at})`);
+    else
+      fail(
+        `step ${at} differs in lightness by ${worstDrift.toFixed(3)} > ${MAX_PROFILE_DRIFT}: ` +
+          `brightness would read as direction as well as count`,
+      );
+  }
+
+  let worst = Infinity;
+  let pair = '';
+  for (const x of a)
+    for (const y of b) {
+      const d = worstDeltaE(x, y);
+      if (d < worst) {
+        worst = d;
+        pair = `${x} vs ${y}`;
+      }
+    }
+  if (worst >= MIN_RAMP_PAIR_SEPARATION)
+    lines.push(`  ok   no step of either ramp is within ${MIN_RAMP_PAIR_SEPARATION} of the other (worst ${worst.toFixed(1)}, ${pair})`);
+  else fail(`the two ramps meet: ${pair} is ${worst.toFixed(1)}, under ${MIN_RAMP_PAIR_SEPARATION}`);
+
+  return { ok, lines: [`exploration ramp pair (${theme}) on ${MAP_SURFACE[theme]}`, ...lines] };
+}
+
 // ---- entry -------------------------------------------------------------------------------
 
 function checkAll(): void {
   const reports = [
-    // exploration[0] is the frontier accent and exploration[4] repeats step 3, so the ramp
-    // proper is entries 1..3 -- see the Palette docblock in theme.ts.
-    checkRamp('exploration repeat ramp (dark)', PALETTES.dark.exploration.slice(1, 4), MAP_SURFACE.dark, PALETTES.dark.frontier, { alpha: effectiveAlpha('dark', 'exploration') }),
     checkRamp('heatmap ramp (dark)', PALETTES.dark.heatmap, MAP_SURFACE.dark, null, { alpha: effectiveAlpha('dark', 'heatmap') }),
-    checkRamp('exploration repeat ramp (light)', PALETTES.light.exploration.slice(1, 4), MAP_SURFACE.light, PALETTES.light.frontier, { alpha: effectiveAlpha('light', 'exploration') }),
     checkRamp('heatmap ramp (light)', PALETTES.light.heatmap, MAP_SURFACE.light, null, { alpha: effectiveAlpha('light', 'heatmap') }),
-    checkRamp('continuous gradient (dark)', PALETTES.dark.gradient, MAP_SURFACE.dark, PALETTES.dark.frontier, { gradient: true }),
-    checkRamp('continuous gradient (light)', PALETTES.light.gradient, MAP_SURFACE.light, PALETTES.light.frontier, { gradient: true }),
-    // Exploration's second accent, three ways: it has to be visible on its own surface, and it
-    // has to stay apart from BOTH the frontier and every step of the ramp it sits between. A
-    // one-element ramp is not a degenerate case here -- it is exactly the question being asked,
-    // and the monotone and gap rules are vacuously true for it rather than skipped.
+    // Exploration's two ramps, each on its own terms and then against each other. The frontier
+    // is deliberately NOT the accent here any more: it stopped being painted on the map, so
+    // holding the ramps away from gold would be enforcing a collision that cannot happen -- and
+    // that constraint is precisely what made a warm ramp impossible on the dark surface.
     ...(['dark', 'light'] as const).flatMap((t) => [
-      checkRamp(`one-way accent (${t})`, [PALETTES[t].oneWay], MAP_SURFACE[t], PALETTES[t].frontier, {
+      checkRamp(`one-way ramp (${t})`, PALETTES[t].oneWay, MAP_SURFACE[t], null, {
+        gradient: true,
         alpha: effectiveAlpha(t, 'exploration'),
       }),
-      checkRamp(`continuous gradient vs one-way accent (${t})`, PALETTES[t].gradient, MAP_SURFACE[t], PALETTES[t].oneWay, {
+      checkRamp(`both-ways ramp (${t})`, PALETTES[t].bothWays, MAP_SURFACE[t], null, {
         gradient: true,
+        alpha: effectiveAlpha(t, 'exploration'),
       }),
+      checkPair(t),
     ]),
+    // The frontier is still a real token, just a UI one. It has to stay legible on its surface;
+    // it no longer has to stay clear of anything the map draws.
+    ...(['dark', 'light'] as const).map((t) =>
+      checkRamp(`frontier accent, interface only (${t})`, [PALETTES[t].frontier], MAP_SURFACE[t], null, {}),
+    ),
   ];
   for (const r of reports) {
     console.log(r.lines.join('\n'));
