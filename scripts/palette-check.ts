@@ -22,6 +22,7 @@ import {
   MAP_SURFACE,
   MODE_ALPHA,
   PALETTES,
+  TRAIL_LINE,
   type Theme,
 } from '../app/src/lib/palette.js';
 
@@ -158,6 +159,14 @@ const COVERAGE_AT_MIN_WIDTH = 0.9;
 
 /** Which palette a surface belongs to. */
 const themeOf = (surface: string): Theme => (surface === MAP_SURFACE.light ? 'light' : 'dark');
+
+/**
+ * Every line the basemap draws that a coverage line could be mistaken for: the road colours sampled
+ * from the styles, and the trail line MapView paints over them. The trail is chosen rather than
+ * sampled, which is why palette.ts keeps it apart, but on screen it is one more road -- and a ramp
+ * found by `search` has to clear it just as a shipped ramp does.
+ */
+const roadsFor = (theme: Theme): string[] => [...BASEMAP_ROAD[theme], TRAIL_LINE[theme]];
 
 /** What a line of this mode actually puts on screen once width and opacity are applied. */
 const effectiveAlpha = (theme: Theme, mode: 'exploration' | 'heatmap'): number =>
@@ -354,7 +363,7 @@ function checkRamp(
     else fail(`hue is only ${closestHue.toFixed(0)}deg off the water hue: a thin line will read as a waterway`);
   }
 
-  const road = BASEMAP_ROAD[themeOf(surface)];
+  const road = roadsFor(themeOf(surface));
   if (road.length) {
     let worstNormal = Infinity;
     let worstCvd = Infinity;
@@ -547,7 +556,7 @@ function search(): void {
   const surface = MAP_SURFACE[theme];
   const accent = argAfter('--accent') ?? PALETTES[theme].frontier;
   const water = BASEMAP_WATER[theme];
-  const road = BASEMAP_ROAD[theme];
+  const road = roadsFor(theme);
 
   /** Every score that matters for one candidate ramp, so nothing is hidden behind a boolean. */
   const score = (ramp: string[]) => ({

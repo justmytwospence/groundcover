@@ -33,7 +33,16 @@ A second deployment serving **the owner's own map, read only, in public**. See `
 section 4.6. It runs entirely in the cloud: a daily Vercel cron rebuilds and republishes, so
 nothing depends on this laptop.
 
-Live at **https://groundcover-spencer.vercel.app**, project `groundcover-spencer`.
+Live at **https://groundcover.spencerboucher.com**, project `groundcover-spencer`. The
+`groundcover-spencer.vercel.app` URL still serves the same deployment; both are production
+domains on the project, so a deploy or a cron rebuild updates both at once.
+
+DNS for `spencerboucher.com` is at Namecheap, not Vercel, so a new subdomain needs a record
+added there by hand: `A groundcover 76.76.21.21`. A wildcard `*` record answers every other
+name with a private address for a home reverse proxy, which means a misconfigured host still
+returns a page instead of failing -- check the response is actually this app before believing
+it. Note `vercel domains add` takes the project from the linked directory, so it must be run
+with `--cwd .local/publish`; from the repo root it would attach the domain to the BYO project.
 
 ```bash
 npm run publish:provision # ONE TIME. creates + connects both blob stores

@@ -60,6 +60,28 @@ export const BASEMAP_ROAD: Record<Theme, string[]> = {
 };
 
 /**
+ * The trail line: every `path` and `track` in the basemap's own tiles, repainted so it can be seen.
+ *
+ * The geometry was always there. Both providers ship it in their `transportation` layer, and
+ * OpenFreeMap's styles draw it -- at 1.04:1 on dark and 1.09:1 on light, which is to say not at
+ * all. MapView paints the same features again on top, at these colours (SPEC.md section 6.3).
+ *
+ * Not a member of BASEMAP_ROAD, because that table is colours sampled from the styles and these
+ * are chosen. They are held to the same rule all the same: once visible, a trail is exactly the
+ * kind of basemap line a coverage line could be mistaken for, so the checker counts it as a road.
+ * Against every ramp step and the frontier:
+ *
+ *   dark  #515a6d  worst 13.2 normal / 10.2 cvd (vs #256abf), 2.38:1 on the surface
+ *   light #9e968a  worst 12.5 normal / 11.7 cvd (vs #c07a00), 2.65:1 on the surface
+ *
+ * What keeps it from competing with coverage is not the colour. It is dashed where coverage is
+ * solid, and thinner than the coverage drawn over the same ground at every zoom, so a grey thread
+ * reads "not yet" and a coloured line on top of it reads "done". Paint it at full strength: the
+ * separations above assume no opacity.
+ */
+export const TRAIL_LINE: Record<Theme, string> = { dark: '#515a6d', light: '#9e968a' };
+
+/**
  * Opacity each mode paints at, 0-255.
  *
  * Heatmap is translucent so overlapping passes accumulate. On dark that accumulation is

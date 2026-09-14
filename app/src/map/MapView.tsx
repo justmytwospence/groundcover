@@ -17,6 +17,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { lngToX, latToY } from '@um/ledger';
 import { readInitialView, useStore } from '../state/store.js';
 import { BASEMAP_STYLES, TERRAIN_TILES, type Theme } from '../lib/theme.js';
+import { TRAIL_LINE } from '../lib/palette.js';
 import type { Viewport } from '../worker/protocol.js';
 
 const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
@@ -30,6 +31,21 @@ const fallbackStyle = (theme: Theme): maplibregl.StyleSpecification => ({
     },
   ],
 });
+
+/**
+ * The basemap's vector source, found by what it carries rather than by name.
+ *
+ * OpenFreeMap calls it `openmaptiles` and CARTO calls it `carto`, but both put paths in a
+ * `transportation` layer with the same fields, so taking whichever source the style's own road
+ * layers draw from is what lets one trail layer serve either provider. Undefined on the flat
+ * fallback, which has no sources at all.
+ */
+const transportationSource = (map: maplibregl.Map): string | undefined => {
+  for (const l of map.getStyle().layers ?? []) {
+    if ('source-layer' in l && l['source-layer'] === 'transportation') return l.source;
+  }
+  return undefined;
+};
 
 /**
  * How hard to chase a basemap before moving to the next provider, and then to a flat background.
@@ -621,8 +637,8 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
   /**
    * Relief shading from a raster-dem source.
    *
-   * Re-applied on every `styledata`, not just once: setStyle() replaces the entire style
-   * document, so a theme change takes the source and the layer with it. The layer is inserted
+   * Re-applied on every `styledata` and `idle`, not just once: setStyle() replaces the entire
+   * style document, so a theme change takes the source and the layer with it. The layer is inserted
    * beneath the first symbol layer so place names stay legible on top of the terrain rather
    * than being shaded along with it.
    */
@@ -651,7 +667,11 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
           attribution: 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
         });
       }
+      // Beneath the trails when they are already drawn, not merely beneath the labels. Both
+      // layers aim for the first symbol, so otherwise whichever is added second lands on top, and
+      // relief laid over the trail lines mutes them exactly where the ground is steepest.
       const firstSymbol = map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
+      const before = map.getLayer('um-trails') ? 'um-trails' : firstSymbol;
       map.addLayer(
         {
           id: 'um-hillshade',
@@ -667,16 +687,82 @@ export function MapView({ onReady, onViewportChange, onHover, onPick }: Props) {
             'hillshade-accent-color': theme === 'light' ? '#6f7885' : '#0a0d12',
           },
         },
+        before,
+      );
+    };
+
+    apply();
+    // 'idle' as well as 'styledata', because styledata alone never meets a loaded style. The
+    // guard is isStyleLoaded(), which waits for every tile, and nothing fires styledata when the
+    // last tile lands: it fires for the style document and for the sprite, and both arrive while
+    // tiles are still loading. So on a fresh load and after every setStyle, each styledata found
+    // the guard shut and nothing came back to try again -- the layer only ever appeared when the
+    // checkbox was clicked on a map that had already finished. 'idle' fires exactly when loaded()
+    // turns true, and apply returns at once when there is nothing to do.
+    map.on('styledata', apply);
+    map.on('idle', apply);
+    return () => {
+      map.off('styledata', apply);
+      map.off('idle', apply);
+    };
+  }, [hillshade, theme]);
+
+  /**
+   * Trails: every `path` and `track` in the basemap's own tiles, repainted so they can be seen.
+   *
+   * Nothing is fetched for this. The tiles already carry the geometry and OpenFreeMap's styles
+   * already draw it, at 1.04:1 on dark and 1.09:1 on light; this paints the same features again
+   * on top, at the colour palette.ts validated against the coverage ramps. See SPEC.md 6.3.
+   *
+   * The tiles only carry paths from z13 up, so further out there is simply nothing to draw.
+   * Filtered on `class` rather than `subclass` because tracks have no subclass, and a subclass
+   * filter would silently drop every forest road. Re-applied on `styledata` and `idle` for the
+   * same reasons the relief layer is: setStyle() takes it away, and only `idle` reliably arrives
+   * once the style has actually loaded.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const apply = () => {
+      if (!map.isStyleLoaded() || map.getLayer('um-trails')) return;
+      const source = transportationSource(map);
+      if (!source) return;
+      const firstSymbol = map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
+      map.addLayer(
+        {
+          id: 'um-trails',
+          type: 'line',
+          source,
+          'source-layer': 'transportation',
+          filter: [
+            'all',
+            // Lines only: pedestrian plazas are `path` polygons, and a line layer would outline them.
+            ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+            ['match', ['get', 'class'], ['path', 'track'], true, false],
+          ],
+          // Butt caps, because round ones swell each dash of a line this thin into a bead.
+          layout: { 'line-cap': 'butt', 'line-join': 'round' },
+          paint: {
+            'line-color': TRAIL_LINE[theme],
+            'line-dasharray': [2, 1.6],
+            // Thinner than the coverage over the same ground at every zoom, so covered trail reads
+            // heavier than uncovered. No line-opacity: the colour is validated at full strength.
+            'line-width': ['interpolate', ['exponential', 1.2], ['zoom'], 13, 1.1, 16, 1.7, 20, 4.5],
+          },
+        },
         firstSymbol,
       );
     };
 
     apply();
     map.on('styledata', apply);
+    map.on('idle', apply);
     return () => {
       map.off('styledata', apply);
+      map.off('idle', apply);
     };
-  }, [hillshade, theme]);
+  }, [theme]);
 
   /**
    * Swap the basemap with the surface.

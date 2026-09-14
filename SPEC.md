@@ -756,6 +756,14 @@ threshold: the dark ramps' recessive step is a 1.90:1 hairline, left alone becau
 job is to recede and no one has reported it (`#256abf` -> `#3480da` would clear the bar at
 2.31:1 if it ever matters).
 
+**The trail line is held to the same rule as the basemap's roads** (`TRAIL_LINE`,
+`app/src/lib/palette.ts`). Its colours are chosen rather than sampled, so they live apart from
+`BASEMAP_ROAD`, but the checker counts them as roads, in `search` as well as in the check: a
+visible trail is exactly the kind of basemap line a coverage line can be mistaken for. Dark
+`#515a6d` is worst 13.2 normal / 10.2 cvd from any ramp step (against `#256abf`); light
+`#9e968a` is worst 12.5 / 11.7 (against the frontier). Neither may carry an opacity, since the
+separations assume the colour lands at full strength.
+
 The basemap changes with the surface: OpenFreeMap `dark` and `positron` respectively. This is
 safe to swap bluntly because deck.gl draws on its own canvas rather than as a layer inside
 MapLibre's style, so `setStyle()` cannot take the coverage geometry with it.
@@ -825,6 +833,34 @@ Basemap: MapLibre GL JS with the OpenFreeMap Dark style
 (`https://tiles.openfreemap.org/styles/dark`). Free, unlimited, no API key. If it fails to
 load, fall back to a flat `--map-surface` background and show a small non-blocking notice —
 the coverage layer is the point, the basemap is context.
+
+**Trail layer** (`um-trails`, `MapView`). Every OSM `path` and `track` (trails, forest roads,
+cycleways, and also sidewalks and steps, which is accepted) drawn as a dashed line beneath
+coverage, so uncovered trail reads as a grey thread and covered trail as a coloured line on top
+of it. Nothing is fetched for it, so neither CSP changes: both providers already ship this
+geometry in their `transportation` layer, and OpenFreeMap's styles already draw it, at 1.04:1 on
+dark and 1.09:1 on light. This layer paints the same features again at `TRAIL_LINE` (section
+6.2). There is no toggle; it corrects an under-styled basemap rather than adding a feature.
+
+- **Paths exist in the tiles from z13 up, and not below.** That is the tile schema's floor on
+  both providers, not a choice made here, and zoomed further out there is nothing to draw.
+  Lowering it would mean hosting our own tiles.
+- **The source is found, not named.** OpenFreeMap calls it `openmaptiles` and CARTO `carto`, but
+  both carry the same `transportation` fields, so the layer draws from whichever source the
+  style's own road layers use. The flat fallback has none, and the layer is skipped.
+- **Filtered on `class`, not `subclass`.** Tracks carry no subclass, so a subclass filter would
+  silently drop every forest road.
+- **Above the relief, beneath labels.** Hillshade inserts beneath `um-trails` when it exists;
+  shading laid over the trails mutes them exactly where the ground is steepest.
+- **Added on `idle`, not only on `styledata`.** Both this layer and the relief guard on
+  `isStyleLoaded()`, which waits for every tile, and MapLibre fires `styledata` only for the
+  style document and the sprite, both of which land while tiles are still loading. Listening to
+  `styledata` alone therefore never met a loaded style after a page load or a `setStyle`, and
+  the layer was silently never added. `idle` fires exactly when the style has loaded.
+- **Thinner than coverage, and never translucent.** 1.1 px at z13 and 1.7 px at z16, against
+  coverage's 2.4 px floor, and thinner than the coverage over the same ground at every zoom, so
+  covered trail always reads heavier than uncovered. Opacity would change the colour that lands
+  and void its validation.
 
 Coverage layer (deck.gl `LineLayer`, added via `MapboxOverlay`): one short oriented segment
 per site, centered on the site position, oriented along its bearing, with length equal to
