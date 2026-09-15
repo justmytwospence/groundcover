@@ -38,11 +38,17 @@ Live at **https://groundcover.spencerboucher.com**, project `groundcover-spencer
 domains on the project, so a deploy or a cron rebuild updates both at once.
 
 DNS for `spencerboucher.com` is at Namecheap, not Vercel, so a new subdomain needs a record
-added there by hand: `A groundcover 76.76.21.21`. A wildcard `*` record answers every other
-name with a private address for a home reverse proxy, which means a misconfigured host still
-returns a page instead of failing -- check the response is actually this app before believing
-it. Note `vercel domains add` takes the project from the linked directory, so it must be run
-with `--cwd .local/publish`; from the repo root it would attach the domain to the BYO project.
+added there by hand: `A groundcover 76.76.21.21`. It also needs one on the homelab's Pi-hole.
+On the WireGuard tunnel, Pi-hole rewrites every `*.spencerboucher.com` name to the homelab's
+Traefik (`172.16.255.1`) and resolves only the names it exempts through upstream DNS -- the
+`server=/<name>/#` lines in `homelab/pihole/dnsmasq.d/05-pihole-custom-cname.conf`, which
+runs on the NUC. A Vercel subdomain missing from that list works for everyone else and shows
+Traefik's Not Found page on every device on the tunnel, including the one you are testing
+from. Neither layer fails loudly: Namecheap's public wildcard also answers every name (the home
+IP), so a misconfigured host still returns a page -- check the response is this app, on and off
+the tunnel, before believing it. Note `vercel domains add` takes the project from the linked
+directory, so it must be run with `--cwd .local/publish`; from the repo root it would attach
+the domain to the BYO project.
 
 ```bash
 npm run publish:provision # ONE TIME. creates + connects both blob stores
